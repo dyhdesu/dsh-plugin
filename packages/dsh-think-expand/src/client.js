@@ -178,9 +178,18 @@ window.__ModuleLoader__.load({
           if (isCurrent(registry, row.uid, row.bodyText)) continue
           // 回合收尾宿主重建行(uid 变)后,已读标记按纯前缀兜底命中:保持用户收起意图,
           // 不再把该行登记为手动展开(手动集合会永久免干预,收起意图就此丢失)。
-          if (findSeenKey(registry.read, row.uid, row.bodyText) !== null) {
-            actions.push({ index, kind: 'collapse' })
-            continue
+          // 同元素重展开例外:插件曾展开过该行(expanded 记录)且 uid 匹配,收起后用户
+          // 再次手动展开是新的手动意图,清除已读命中键后落入手动登记;重建行 uid 失配
+          // 不命中 expanded,保持收起语义不变。已知权衡:宽松已读(uid 缺失)跨行前缀
+          // 命中时,重展开他行会连带清除待重建行的收起保护(同文本前缀 + 双行 + 特定
+          // 时序才触发,与宽松已读既有权衡同族)。
+          const readKey = findSeenKey(registry.read, row.uid, row.bodyText)
+          if (readKey !== null) {
+            if (row.uid !== undefined && registry.expanded.has(row.uid)) registry.read.delete(readKey)
+            else {
+              actions.push({ index, kind: 'collapse' })
+              continue
+            }
           }
           if (findSeenKey(registry.manual, row.uid, row.bodyText) === null) {
             putSeen(registry.manual, row.uid, row.bodyText)

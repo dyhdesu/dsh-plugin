@@ -253,6 +253,26 @@ function defineScenarios(prefix, L) {
     assert.equal(again.actions.length, 0)
   })
 
+  test(prefix + '同元素收起后再手动展开:识别为新手动意图,不再强制收起', () => {
+    const reg = createRegistry()
+    // 插件展开流式行 uid=5 并登记
+    plan(reg, [row(RUNNING, '思考正文', false, true, false, 5)])
+    assert.equal(reg.expanded.has(5), true)
+    // 用户手动收起 → 已读落盘
+    plan(reg, [row(RUNNING, '思考正文', false, true, false, 5)])
+    assert.equal(reg.read.size, 1)
+    // 用户再次手动展开同一行:不得因已读标记被强制收起
+    const reexpand = plan(reg, [row(RUNNING, '思考正文', true, true, false, 5)])
+    assert.equal(collapseOf(reexpand, 0), 0)
+    assert.equal(expandOf(reexpand, 0), 0)
+    assert.equal(reg.manual.size, 1, '重展开应登记为手动意图')
+    assert.equal(reg.read.size, 0, '已读命中键应被清除')
+    // 此后插件不干预该行
+    const later = plan(reg, [row(OK, '思考正文', true, true, false, 5), row(RUNNING, '下一条')])
+    assert.equal(collapseOf(later, 0), 0)
+    assert.equal(expandOf(later, 1), 1)
+  })
+
   test(prefix + 'RC2-2 回合收尾重建行:宽松已读保持收起意图', () => {
     const reg = createRegistry()
     plan(reg, [row(RUNNING, '思考内容', false, true, false, 2)])

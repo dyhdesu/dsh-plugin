@@ -17,10 +17,21 @@ export const CALL_NAME = 'rs_workflow_start'
 // note/done/brief 为 planner-gate(#5/#6/#8)必填,缺任一即拒单(连续 3 次拒单关闭编排入口)
 export const CALL_ARGUMENTS = '{"request":"compat rsww run probe","templateId":"compat-test","plan":{"brief":"compat acceptance","steps":[{"ref":"first","note":"echo-upstream -call probe","done":"result 回填"}]}}'
 
-// 场景 → 工具调用载荷:无工具场景返回 null
-export function toolCallOf(scenario) {
+// 场景 → 工具调用载荷:无工具场景返回 null。
+// -call 分流:工具清单含 structured_output = 段执行 agent → 提交结构化产出;
+// 含 rs_workflow_start 且无工具交互(无 tool 角色/assistant.tool_calls 消息)= 主循环首轮 → 发 start;
+// 其余(主循环续轮/段续轮)恒文本,防编排回合无限工具循环
+export const STRUCTURED_OUTPUT_ARGUMENTS = '{"result":"compat-ok"}'
+export function toolCallOf(scenario, parsedBody) {
   if (scenario === 'tool') return { name: TOOL_NAME, arguments: TOOL_ARGUMENTS, id: 'call_echo-upstream', anthropicId: 'toolu_echo-upstream' }
-  if (scenario === 'call') return { name: CALL_NAME, arguments: CALL_ARGUMENTS, id: 'call_echo-upstream-call', anthropicId: 'toolu_echo-upstream-call' }
+  if (scenario === 'call') {
+    const msgs = Array.isArray(parsedBody?.messages) ? parsedBody.messages : []
+    const names = (parsedBody?.tools ?? []).map((t) => t?.function?.name ?? t?.name)
+    if (names.includes('structured_output')) return { name: 'structured_output', arguments: STRUCTURED_OUTPUT_ARGUMENTS, id: 'call_echo-upstream-so', anthropicId: 'toolu_echo-upstream-so' }
+    const interacted = msgs.some((m) => m.role === 'tool' || (Array.isArray(m.tool_calls) && m.tool_calls.length > 0))
+    if (!interacted && names.includes(CALL_NAME)) return { name: CALL_NAME, arguments: CALL_ARGUMENTS, id: 'call_echo-upstream-call', anthropicId: 'toolu_echo-upstream-call' }
+    return null
+  }
   return null
 }
 

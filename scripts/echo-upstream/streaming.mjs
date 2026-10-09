@@ -21,7 +21,7 @@ function anthropicUsage(tokens) {
   return { input_tokens: tokens?.[0] ?? 1, output_tokens: tokens?.[1] ?? 1 }
 }
 
-async function writeOpenaiStream(response, model, tokens, scenario) {
+async function writeOpenaiStream(response, model, tokens, scenario, toolCall) {
   response.writeHead(200, SSE_HEADERS)
   const chunk = (delta, extra = {}) => JSON.stringify({
     id: 'chatcmpl-echo-upstream', object: 'chat.completion.chunk', created: 0, model,
@@ -40,8 +40,7 @@ async function writeOpenaiStream(response, model, tokens, scenario) {
   }
   if (scenario === 'slow') await sleep(SLOW_CHUNK_INTERVAL_MS)
   if (scenario === 'drop') { response.end(); return }
-  if (scenario === 'tool' || scenario === 'call') {
-    const toolCall = toolCallOf(scenario)
+  if (toolCall !== null) {
     sseWrite(response, null, chunk({ tool_calls: [{ index: 0, id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: toolCall.arguments } }] }))
     sseWrite(response, null, JSON.stringify({
       id: 'chatcmpl-echo-upstream', object: 'chat.completion.chunk', created: 0, model,
@@ -85,7 +84,7 @@ async function writeResponsesStream(response, model, tokens, scenario) {
   response.end()
 }
 
-async function writeAnthropicStream(response, model, tokens, scenario) {
+async function writeAnthropicStream(response, model, tokens, scenario, toolCall) {
   response.writeHead(200, SSE_HEADERS)
   sseWrite(response, 'message_start', JSON.stringify({
     type: 'message_start',
@@ -103,8 +102,7 @@ async function writeAnthropicStream(response, model, tokens, scenario) {
   }
   if (scenario === 'slow') await sleep(SLOW_CHUNK_INTERVAL_MS)
   if (scenario === 'drop') { response.end(); return }
-  if (scenario === 'tool' || scenario === 'call') {
-    const toolCall = toolCallOf(scenario)
+  if (toolCall !== null) {
     blockStart(index, { type: 'tool_use', id: toolCall.anthropicId, name: toolCall.name, input: {} })
     blockDelta(index, { type: 'input_json_delta', partial_json: toolCall.arguments })
     blockStop(index)
@@ -139,8 +137,8 @@ export function installDelegate(options = {}) {
       if (scenario === 'err500') return respondError(response, 500), true
       if (!parsedBody?.stream) return undefined
       if (request.url.includes('/responses')) return void writeResponsesStream(response, model, startOptions.tokens, scenario), true
-      if (request.url.includes('/messages')) return void writeAnthropicStream(response, model, startOptions.tokens, scenario), true
-      return void writeOpenaiStream(response, model, startOptions.tokens, scenario), true
+      if (request.url.includes('/messages')) return void writeAnthropicStream(response, model, startOptions.tokens, scenario, toolCallOf(scenario, parsedBody)), true
+      return void writeOpenaiStream(response, model, startOptions.tokens, scenario, toolCallOf(scenario, parsedBody)), true
     },
   }
 }

@@ -45,7 +45,7 @@ export function respondFor(method, path, headers, parsedBody, options = {}) {
   const model = parsedBody?.model ?? null
   if (method === 'GET' && path.includes('/models')) return modelListResponse(headers, options.models)
   const thinking = options.scenario === 'think'
-  const toolCall = toolCallOf(options.scenario)
+  const toolCall = toolCallOf(options.scenario, parsedBody)
   const scenarioTool = toolCall !== null
   const [input = 1, output = 1] = options.tokens ?? []
   if (path.includes('/responses')) {

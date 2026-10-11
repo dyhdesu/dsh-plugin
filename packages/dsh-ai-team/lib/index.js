@@ -19,9 +19,12 @@ export function apply(ctx, config) {
       console.warn('[ai-team] tools-row without control runtime, skipped')
       return
     }
+    console.warn('[ai-team] tools-row row activating')
     ctx.inject(['tools'], (scope) => {
+      console.warn('[ai-team] tools-row inject fired, register start')
       // 同 rs-workflow orchestrator 形态:effect 包 register 调用本体,行销毁即注销
       scope.effect(() => registerToolRow(scope, { store: runtime.store, now: () => Date.now() }), 'ai-team tools-row')
+      console.warn('[ai-team] tools-row register done')
     })
     return
   }

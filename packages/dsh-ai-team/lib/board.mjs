@@ -2,8 +2,10 @@
 // 安全边界(全仓库约定):不做 host 认证;写路由跨源防护以 Origin 同源比对为上限。
 import { queryBoard, projectTaskDetail } from './core/query.mjs'
 import { stopAll, recordStopOperation } from './core/global-control.mjs'
-import { stopTask, confirmStopped, hasActiveRuns } from './core/task.mjs'
+import { stopTask, confirmStopped, hasActiveRuns, submitReport } from './core/task.mjs'
 import { createSettings, saveSettings } from './core/settings.mjs'
+import { dispatchRun } from './core/orchestrator.mjs'
+import { createTask, defineWorkItem, authorizeTask } from './core/task.mjs'
 
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
@@ -49,7 +51,7 @@ function readBody(req) {
   })
 }
 
-export function createBoardApi({ store, now = Date.now }) {
+export function createBoardApi({ store, drive, now = Date.now }) {
   async function handleBoard(req, res, url = new URL(req.url ?? '/api/ai-team/board', 'http://local')) {
     try {
       const [aggregates, control] = await Promise.all([store.listAggregates(), store.loadControl()])
@@ -176,5 +178,95 @@ export function createBoardApi({ store, now = Date.now }) {
     }
   }
 
-  return { handleBoard, handleInterrupt, handleSettings }
+  // 测试编排入口(PKG-2: 驱动执行/停止链证明,非正式角色自主调度):
+  // dispatch=经受管会话真实派发;report=以受管角色身份提交结构化报告
+  async function handleDrive(req, res) {
+    try {
+      if (rejectCrossOrigin(req, res)) return
+      if (!drive) {
+        sendJson(res, 501, { error: '会话适配未装配' })
+        return
+      }
+      const raw = await readBody(req).catch((error) => { throw Object.assign(error, { statusCode: error.statusCode ?? 400 }) })
+      let body = {}
+      try {
+        body = raw ? JSON.parse(raw) : {}
+      } catch {
+        sendJson(res, 400, { error: '请求体不是合法 JSON' })
+        return
+      }
+      const aggregate = await store.loadAggregate(body.taskId)
+      if (!aggregate) {
+        sendJson(res, 404, { error: `任务不存在: ${body.taskId}` })
+        return
+      }
+      const control = await store.loadControl()
+      if (body.action === 'create') {
+        if (await store.loadAggregate(body.taskId)) {
+          sendJson(res, 409, { error: `任务已存在: ${body.taskId}` })
+          return
+        }
+        const created = createTask({
+          taskId: body.taskId, title: body.title ?? body.taskId, projectWorkspaceId: body.projectWorkspaceId ?? 'default',
+          definition: body.definition ?? { goal: body.goal ?? '测试目标' }, now,
+        })
+        if (!created.ok) {
+          sendJson(res, 400, { error: created.message })
+          return
+        }
+        let agg = created.result
+        const def = defineWorkItem(agg, { workItemId: body.workItemId ?? 'w1', title: body.workItemTitle ?? '子项一' })
+        if (!def.ok) {
+          sendJson(res, 400, { error: def.message })
+          return
+        }
+        agg = def.result.aggregate
+        agg = authorizeTask(agg, { sourceMessageRef: { sessionId: 'drive', messageId: body.requestId ?? 'drive' } }).result.aggregate
+        await store.saveAggregate(agg)
+        sendJson(res, 200, { ok: true, taskId: agg.taskId, businessState: agg.businessState })
+        return
+      }
+      if (body.action === 'dispatch') {
+        const outcome = await dispatchRun(store, aggregate, {
+          runId: body.runId ?? `run-${now().toString(36)}`,
+          workItemId: body.workItemId,
+          phase: body.phase ?? 'implement',
+          actorRole: body.phase === 'accept' ? 'reviewer' : 'executor',
+          requestId: body.requestId ?? `req-${now().toString(36)}`,
+          content: body.content ?? `任务 ${body.taskId}/${body.workItemId}`,
+          presetId: body.presetId ?? 'ai-team-worker',
+          sessionAdapter: drive.sessionAdapter,
+          globalControl: control,
+        })
+        if (!outcome.ok) {
+          sendJson(res, 409, { error: outcome.message, code: outcome.code })
+          return
+        }
+        await store.saveAggregate(outcome.aggregate)
+        sendJson(res, 200, { ok: true, runId: outcome.runId, sessionId: outcome.sessionId, state: outcome.aggregate.runs[outcome.runId]?.state })
+        return
+      }
+      if (body.action === 'report') {
+        const outcome = submitReport(aggregate, {
+          reportId: body.reportId ?? `rep-${now().toString(36)}`,
+          runId: body.runId,
+          verdict: body.verdict,
+          coveredCriterionIds: body.coveredCriterionIds ?? [],
+          issues: body.issues ?? [],
+        })
+        if (!outcome.ok) {
+          sendJson(res, 409, { error: outcome.message, code: outcome.code })
+          return
+        }
+        await store.saveAggregate(outcome.result.aggregate)
+        sendJson(res, 200, { ok: true, businessState: outcome.result.aggregate.businessState })
+        return
+      }
+      sendJson(res, 400, { error: 'action 须为 create/dispatch/report' })
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, { error: error.message })
+    }
+  }
+
+  return { handleBoard, handleInterrupt, handleSettings, handleDrive }
 }

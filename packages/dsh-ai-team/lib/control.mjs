@@ -48,13 +48,21 @@ export function registerControl(ctx) {
       return Promise.all(ids.map((id) => store.loadAggregate(id)))
     }
 
+    const sessionAdapter = 'sessionController' in scope
+      ? createSessionAdapter({ sessionController: scope.sessionController })
+      : null
     const settingsInitial = () => createSettings(() => Date.now())
     // 历史污染自愈:记录若为信封形态(values 缺失)视同未初始化
     const unwrapSettings = (s) => (s && s.values ? s : null)
-    const api = createBoardApi({ store: { ...store, listAggregates, settings: true, loadSettings: () => Promise.resolve(unwrapSettings(table.get('settings')) ?? settingsInitial()), updateSettings: (fn) => updateSettingsRecord(table, (cur) => fn(unwrapSettings(cur) ?? settingsInitial()), settingsInitial()) }, now: () => Date.now() })
+    const api = createBoardApi({
+      store: { ...store, listAggregates, settings: true, loadSettings: () => Promise.resolve(unwrapSettings(table.get('settings')) ?? settingsInitial()), updateSettings: (fn) => updateSettingsRecord(table, (cur) => fn(unwrapSettings(cur) ?? settingsInitial()), settingsInitial()) },
+      drive: sessionAdapter ? { sessionAdapter } : null,
+      now: () => Date.now(),
+    })
     ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/board', handler: api.handleBoard }), 'ai-team board')
     ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/interrupt', handler: api.handleInterrupt }), 'ai-team interrupt')
     ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/settings', handler: api.handleSettings }), 'ai-team settings')
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/drive', handler: api.handleDrive }), 'ai-team drive')
     // 业务工具注册进全局工具面;guard 按预设精确 id 拒绝非受管会话(tools-row)
     ctx.effect(registerToolRow(ctx, { store, now: () => Date.now() }))
     // 角色预设:管理员/调度员/实施(persona 只含角色边界,不含 shell/写文件/委派)

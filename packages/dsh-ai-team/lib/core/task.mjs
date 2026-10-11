@@ -385,6 +385,33 @@ export function requestCancel(aggregate, { sourceMessageRef }) {
   return pass({ aggregate: next })
 }
 
+// workItem.replace:单次聚合 update 内撤销旧项并创建新 ID;旧执行树须已核清;
+// failedAcceptanceCount 继承(不借换 ID 清零),旧 pass 只属旧 ID
+export function replaceWorkItem(aggregate, { oldWorkItemId, newWorkItemId, title, scope = '', dependencyWorkItemIds = [], requiredCriterionIds = [], reason }) {
+  const old = aggregate.workItems[oldWorkItemId]
+  if (!old) return fail(E.NOT_FOUND, `workItem 不存在: ${oldWorkItemId}`)
+  if (aggregate.workItems[newWorkItemId]) return fail(E.INVALID_ARGUMENT, `新 workItem ID 已存在: ${newWorkItemId}`)
+  const inFlight = Object.values(aggregate.runs).some((r) => r.workItemId === oldWorkItemId && ['prepared', 'submitted', 'running'].includes(r.state))
+  if (inFlight) return fail(E.EXECUTION_STILL_ACTIVE, '旧执行树存在未核清 Run,不可替代')
+  if (!reason) return fail(E.INVALID_ARGUMENT, '替代必须给出解释')
+  const draft = { ...aggregate, workItems: { ...aggregate.workItems, [oldWorkItemId]: { ...old, replacedBy: newWorkItemId } } }
+  const created = defineWorkItem(draft, { workItemId: newWorkItemId, title, scope, dependencyWorkItemIds, requiredCriterionIds })
+  if (!created.ok) return created
+  let next = created.result.aggregate
+  next = bump(next)
+  next.workItems = {
+    ...next.workItems,
+    [newWorkItemId]: {
+      ...next.workItems[newWorkItemId],
+      failedAcceptanceCount: old.failedAcceptanceCount,
+      failureSources: [...old.failureSources],
+      replacesWorkItemId: oldWorkItemId,
+      replacementReason: reason,
+    },
+  }
+  return pass({ aggregate: next })
+}
+
 // 依赖解除:仅 blocked(依赖缺失)回 blockedFrom 业务状态;不解除控制暂停
 export function resolveDependencyBlock(aggregate) {
   if (aggregate.businessState !== 'blocked' || aggregate.block?.reason !== 'dependency_missing') {

@@ -52,6 +52,11 @@ export function projectTaskSummary(aggregate) {
     authorized: aggregate.authorization !== null,
     workItemCount: Object.keys(aggregate.workItems).length,
     activeRunCount: Object.values(aggregate.runs).filter((r) => ['prepared', 'submitted', 'running'].includes(r.state)).length,
+    runs: Object.values(aggregate.runs).map((r) => ({
+      runId: r.runId, phase: r.phase, state: r.state, presetId: r.presetId,
+      startedAt: r.startedAt, endedAt: r.endedAt,
+    })),
+    modelTaskCount: new Set(Object.values(aggregate.runs).map((r) => r.presetId).filter(Boolean)).size,
     updatedAt: aggregate.updatedAt,
   }
 }

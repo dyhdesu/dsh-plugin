@@ -60,6 +60,7 @@ window.__ModuleLoader__.load({
       const [loadError, setLoadError] = useState(false)
       const [observedAt, setObservedAt] = useState(null)
       const [search, setSearch] = useState('')
+      const [tab, setTab] = useState('board')
       const [selected, setSelected] = useState(null)
       const [writing, setWriting] = useState(false)
       const inflight = useRef(null)
@@ -120,6 +121,9 @@ window.__ModuleLoader__.load({
             : h('span', null, `数据观察时间 ${observedAt ? observedAt.toLocaleTimeString() : '—'}`),
         ),
         h('div', { className: 'at-toolbar' },
+          h('button', { className: `at-btn${tab === 'board' ? ' at-card--on' : ''}`, onClick: () => setTab('board') }, '看板'),
+          h('button', { className: `at-btn${tab === 'timeline' ? ' at-card--on' : ''}`, onClick: () => setTab('timeline') }, '实际时间线'),
+          h('button', { className: `at-btn${tab === 'models' ? ' at-card--on' : ''}`, onClick: () => setTab('models') }, '模型任务'),
           h('input', {
             className: 'at-search', placeholder: '任务标题/标识搜索', value: search,
             onChange: (e) => setSearch(e.target.value),
@@ -129,7 +133,7 @@ window.__ModuleLoader__.load({
             onClick: () => interrupt({ global: true, commandId: newCommandId('stop') }),
           }, '全局紧急停止'),
         ),
-        h('div', { className: 'at-board' },
+        tab === 'board' ? h('div', { className: 'at-board' },
           COLUMNS.map(([key, label]) => {
             const list = items.filter((t) => t.businessState === key)
             const count = data?.counts?.[key]
@@ -149,7 +153,24 @@ window.__ModuleLoader__.load({
             )
           }),
           items.length === 0 ? h('div', { className: 'at-empty' }, data ? '没有匹配的任务' : '读取中…') : null,
-        ),
+        ) : null,
+        tab === 'timeline' ? h('div', { className: 'at-detail' },
+          h('div', { className: 'at-detail__head' }, h('strong', null, '实际时间线(仅真实执行区间,无预计与百分比)')),
+          selectedTask
+            ? h('div', { className: 'at-detail__body' },
+              (selectedTask.runs ?? []).length === 0 ? h('span', { className: 'at-empty' }, '该任务暂无执行记录') :
+                (selectedTask.runs ?? []).map((r) => h('span', { key: r.runId },
+                  `${r.runId} · ${r.phase} · ${r.state}${r.startedAt ? ' · 起 ' + new Date(r.startedAt).toLocaleTimeString() : ' · 未实际开始'}${r.endedAt ? ' · 止 ' + new Date(r.endedAt).toLocaleTimeString() : ''}`)))
+            : h('span', { className: 'at-empty' }, '在看板中选中任务后显示其执行时间线'),
+        ) : null,
+        tab === 'models' ? h('div', { className: 'at-detail' },
+          h('div', { className: 'at-detail__head' }, h('strong', null, '模型任务(参与任务去重计数,无绩效分析)')),
+          h('div', { className: 'at-detail__body' },
+            items.filter((t) => (t.runs ?? []).length > 0).length === 0
+              ? h('span', { className: 'at-empty' }, '暂无模型参与记录')
+              : items.filter((t) => (t.runs ?? []).length > 0).map((t) => h('span', { key: t.taskId },
+                `${t.title} · 参与模型 ${t.modelTaskCount} · Run ${t.runs.length}`))),
+        ) : null,
         selectedTask ? h('div', { className: 'at-detail', role: 'dialog', 'aria-label': '任务详情' },
           h('div', { className: 'at-detail__head' },
             h('strong', null, selectedTask.title),

@@ -183,7 +183,7 @@ export function createBoardApi({ store, drive, now = Date.now }) {
   async function handleDrive(req, res) {
     try {
       if (rejectCrossOrigin(req, res)) return
-      if (!drive) {
+      if (!drive?.sessionAdapter) {
         sendJson(res, 501, { error: '会话适配未装配' })
         return
       }
@@ -193,11 +193,6 @@ export function createBoardApi({ store, drive, now = Date.now }) {
         body = raw ? JSON.parse(raw) : {}
       } catch {
         sendJson(res, 400, { error: '请求体不是合法 JSON' })
-        return
-      }
-      const aggregate = await store.loadAggregate(body.taskId)
-      if (!aggregate) {
-        sendJson(res, 404, { error: `任务不存在: ${body.taskId}` })
         return
       }
       const control = await store.loadControl()
@@ -226,7 +221,15 @@ export function createBoardApi({ store, drive, now = Date.now }) {
         sendJson(res, 200, { ok: true, taskId: agg.taskId, businessState: agg.businessState })
         return
       }
+      if (body.action === 'dispatch' || body.action === 'report') {
+        const aggregate = await store.loadAggregate(body.taskId)
+        if (!aggregate) {
+          sendJson(res, 404, { error: `任务不存在: ${body.taskId}` })
+          return
+        }
+      }
       if (body.action === 'dispatch') {
+        const aggregate = await store.loadAggregate(body.taskId)
         const outcome = await dispatchRun(store, aggregate, {
           runId: body.runId ?? `run-${now().toString(36)}`,
           workItemId: body.workItemId,
@@ -237,16 +240,29 @@ export function createBoardApi({ store, drive, now = Date.now }) {
           presetId: body.presetId ?? 'ai-team-worker',
           sessionAdapter: drive.sessionAdapter,
           globalControl: control,
+          sessionWorkspaceId: body.sessionWorkspaceId,
+          sessionCwd: body.sessionCwd,
         })
         if (!outcome.ok) {
-          sendJson(res, 409, { error: outcome.message, code: outcome.code })
+          sendJson(res, 409, { error: outcome.message, code: outcome.code, debugStack: outcome.stack?.split('\n').slice(0, 8) })
           return
         }
         await store.saveAggregate(outcome.aggregate)
         sendJson(res, 200, { ok: true, runId: outcome.runId, sessionId: outcome.sessionId, state: outcome.aggregate.runs[outcome.runId]?.state })
         return
       }
+      if (body.action === 'prompt') {
+        if (!drive.sessionAdapter) return sendJson(res, 501, { error: '会话适配未装配' })
+        const outcome = await drive.sessionAdapter.dispatchPrompt({
+          sessionId: body.sessionId,
+          requestId: body.requestId ?? `req-${now().toString(36)}`,
+          content: typeof body.content === 'string' ? [{ type: 'text', text: body.content }] : body.content ?? [{ type: 'text', text: '继续' }],
+        })
+        sendJson(res, 200, { ok: true, accepted: outcome?.accepted ?? false, turnId: outcome?.turnId ?? null })
+        return
+      }
       if (body.action === 'report') {
+        const aggregate = await store.loadAggregate(body.taskId)
         const outcome = submitReport(aggregate, {
           reportId: body.reportId ?? `rep-${now().toString(36)}`,
           runId: body.runId,

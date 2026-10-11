@@ -19,7 +19,7 @@ const WATCH_POLL_MS = 5000
 // 装饰器形态:echo 路由声明在官方 llm-pi-ai 节(官方行自服务,gateway 仅经
 // registerAdapter shadow 装饰,不服务任何路由);gateway 节仅 sessionMarker。
 // 不再注入官方行静态禁用(接管形态遗产,已退役)
-function ensureGatewaySeed(patchPath, logFn, { gateway = false, think = false } = {}) {
+function ensureGatewaySeed(patchPath, logFn, { gateway = false, think = false, llmPort = 18123 } = {}) {
   if (!gateway && !think) return []
   const seeded = []
   try {
@@ -32,7 +32,7 @@ function ensureGatewaySeed(patchPath, logFn, { gateway = false, think = false } 
         '      echo-openai:',
         '        displayName: Echo OpenAI',
         '        api: openai-completions',
-        '        baseURL: http://127.0.0.1:18123',
+        `        baseURL: http://127.0.0.1:${llmPort}`,
         '        apiKeyEnv: ECHO_KEY',
         '        defaultInput:',
         '          - text',
@@ -44,7 +44,7 @@ function ensureGatewaySeed(patchPath, logFn, { gateway = false, think = false } 
         '      echo-anthropic:',
         '        displayName: Echo Anthropic',
         '        api: anthropic-messages',
-        '        baseURL: http://127.0.0.1:18123',
+        `        baseURL: http://127.0.0.1:${llmPort}`,
         '        apiKeyEnv: ECHO_KEY',
         '        defaultInput:',
         '          - text',
@@ -124,6 +124,7 @@ function parseArgs(argv) {
     const map = {
       '--version': () => { args.version = argv[++i] },
       '--port': () => { args.port = Number(argv[++i]) },
+      '--llm-port': () => { args.llmPort = Number(argv[++i]) },
       '--host-dir': () => { args.hostDir = argv[++i] },
       '--daemon': () => { args.daemon = true },
       // 会话夹具轮(#5/#6 类需要伪造会话跨重启存活)跳过净启动清理
@@ -222,6 +223,7 @@ async function bootOnce() {
   const seeded = ensureGatewaySeed(join(profile.homeDir, 'profiles', 'web', 'cordis.patch.yml'), log, {
     gateway: wantedShort.includes('dsh-llm-pi-gateway'),
     think: wantedShort.includes('dsh-think-expand'),
+    llmPort: args.llmPort ?? 18123,
   })
   const bootLog = createWriteStream(join(workDir, 'boot-l3.log'), { flags: 'w' })
   const child = spawn(process.execPath, [binPath, 'web', '--no-open', '--port', String(port)], {

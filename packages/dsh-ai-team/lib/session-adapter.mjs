@@ -12,7 +12,8 @@ export function createSessionAdapter({ sessionController }) {
   }
 
   async function dispatchPrompt({ sessionId, requestId, content, mode = 'queue' }) {
-    return sessionController.prompt({ requestId, sessionId, mode, content })
+    // prompt(request, signal):插件无调用方取消语义,挂独立不中止 signal
+    return sessionController.prompt({ requestId, sessionId, mode, content }, new AbortController().signal)
   }
 
   function cancelSession({ sessionId, pendingItemIds = [] }) {

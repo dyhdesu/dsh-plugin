@@ -5,7 +5,7 @@ import { createBoardApi } from './board.mjs'
 import { createSessionAdapter } from './session-adapter.mjs'
 import { registerToolRow } from './tools-row.mjs'
 import { presetDefinitions } from './presets.mjs'
-import { updateControlRecord, updateSettingsRecord } from './store.mjs'
+import { updateControlRecord, updateIndexRecord, updateSettingsRecord } from './store.mjs'
 import { createGlobalControl } from './core/global-control.mjs'
 import { createSettings } from './core/settings.mjs'
 
@@ -32,10 +32,11 @@ export function registerControl(ctx) {
       loadAggregate: (id) => Promise.resolve(table.get(`task/${id}`)),
       saveAggregate: async (agg) => {
         await table.put(`task/${agg.taskId}`, agg)
-        await table.update('taskIndex', (index) => {
+        await updateIndexRecord(table, () => {
+          const index = table.get('taskIndex')
           const ids = index?.ids ?? []
           return ids.includes(agg.taskId) ? index : { ids: [...ids, agg.taskId] }
-        })
+        }, { ids: [] })
         return agg
       },
       updateAggregate: (id, fn) => table.update(`task/${id}`, fn),
@@ -48,15 +49,18 @@ export function registerControl(ctx) {
       return Promise.all(ids.map((id) => store.loadAggregate(id)))
     }
 
-    const sessionAdapter = 'sessionController' in scope
-      ? createSessionAdapter({ sessionController: scope.sessionController })
-      : null
+    // sessionController 挂宿主顶层 ctx(探针留档);经 inject 门控就绪后装配会话面,缺失即干净禁用
+    const driveRef = { sessionAdapter: null }
+    ctx.inject(['sessionController'], (sessionScope) => {
+      if (stopped) return
+      driveRef.sessionAdapter = createSessionAdapter({ sessionController: sessionScope.sessionController ?? ctx.sessionController })
+    })
     const settingsInitial = () => createSettings(() => Date.now())
     // 历史污染自愈:记录若为信封形态(values 缺失)视同未初始化
     const unwrapSettings = (s) => (s && s.values ? s : null)
     const api = createBoardApi({
       store: { ...store, listAggregates, settings: true, loadSettings: () => Promise.resolve(unwrapSettings(table.get('settings')) ?? settingsInitial()), updateSettings: (fn) => updateSettingsRecord(table, (cur) => fn(unwrapSettings(cur) ?? settingsInitial()), settingsInitial()) },
-      drive: sessionAdapter ? { sessionAdapter } : null,
+      drive: driveRef,
       now: () => Date.now(),
     })
     ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/board', handler: api.handleBoard }), 'ai-team board')

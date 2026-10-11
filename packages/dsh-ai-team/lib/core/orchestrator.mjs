@@ -7,18 +7,22 @@ import {
 } from './task.mjs'
 
 // 派发:许可校验→会话确保→prompt 受理→Run 落盘;受理失败 Run 标 rejected
-export async function dispatchRun(store, aggregate, { runId, workItemId, phase, actorRole, requestId, content, presetId, sessionAdapter, globalControl }) {
+export async function dispatchRun(store, aggregate, { runId, workItemId, phase, actorRole, requestId, content, presetId, sessionAdapter, globalControl, sessionWorkspaceId, sessionCwd }) {
   const perm = checkExecutionPermission(aggregate, globalControl, { workItemId, phase, actorRole })
   if (!perm.ok) return perm
-  const session = await sessionAdapter.ensureSession({ agentPreset: presetId })
-  const sessionId = session.sessionId
+  // 会话落点:显式指定优先,缺省跟随任务工作区(CAP-01: 不改普通 workspace)
+  const sessionTarget = sessionCwd !== undefined ? { cwd: sessionCwd, agentPreset: presetId }
+    : { workspaceId: sessionWorkspaceId ?? aggregate.projectWorkspaceId, agentPreset: presetId }
   let prompt
+  let sessionId
   try {
-    prompt = await sessionAdapter.dispatchPrompt({ sessionId, requestId, content })
+    const session = await sessionAdapter.ensureSession(sessionTarget)
+    sessionId = session.sessionId
+    // prompt content 契约:块数组形态(dsh prompt hasPromptContent)
+    const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content
+    prompt = await sessionAdapter.dispatchPrompt({ sessionId, requestId, content: blocks })
   } catch (error) {
-    const failed = recordRun(aggregate, { runId, workItemId, phase, actorRole, sessionId, requestId, presetId, slotKey: perm.result.slotKey, globalControl })
-      .result.aggregate
-    return { ok: false, code: 'DISPATCH_FAILED', message: String(error?.message ?? error), runId, aggregate: { ...failed, runs: markRun(failed.runs, runId, 'rejected') } }
+    return { ok: false, code: 'DISPATCH_FAILED', message: String(error?.message ?? error), stack: error?.stack, runId }
   }
   if (!prompt?.accepted) {
     const rejected = recordRun(aggregate, { runId, workItemId, phase, actorRole, sessionId, requestId, presetId, slotKey: perm.result.slotKey, globalControl }).result.aggregate

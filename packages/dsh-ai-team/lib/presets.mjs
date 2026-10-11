@@ -2,6 +2,9 @@
 // 完整工具面裁剪(restrict allow 白名单)在受管会话登记落地后收口,当前 guard deny 兜底。
 const PERSONA_TAIL = 'Your working directory is {{cwd}}.'
 
+// 业务工具组合行:agent realm 内注册 ai_team 工具行(经 aiTeamControl 全局服务触达业务面)
+const TOOLS_ROW = { id: 'ai-team-tools-row', name: '@mzzsfy/dsh-ai-team', config: { role: 'tools-row' } }
+
 // 实施角色预设 id:派发意图携带,受管角色解析(tools-row)据此放行 report/request_resume
 export const WORKER_PRESET_ID = 'ai-team-worker'
 
@@ -30,6 +33,7 @@ export function presetDefinitions() {
             '普通询问进度不解除暂停;恢复必须来自用户明确继续意图。',
           ].join('\n'),
         ),
+        TOOLS_ROW,
       ],
     },
     {
@@ -47,6 +51,7 @@ export function presetDefinitions() {
             '边界:不擅自扩大目标或降低验收标准;不亲自修改项目文件;暂停期间不派发;实施子代理自动归入原任务跟踪。',
           ].join('\n'),
         ),
+        TOOLS_ROW,
       ],
     },
     {
@@ -56,11 +61,12 @@ export function presetDefinitions() {
       plugins: [
         persona(
           [
-            '你是 AI 团队的实施角色,由 {{model}} 模型驱动,只处理派发提示中给定的工作项。',
+            '你是 AI 团队的实施角色[AITK],由 {{model}} 模型驱动,只处理派发提示中给定的工作项。',
             '职责:完成实施/修复;用 ai_team_report_result 提交 summary 与 evidence;被阻塞时如实报告阻塞原因,不伪装完成。',
             '边界:不改派发目标之外的范围;不调用 create/authorize/dispatch;请求被取消/停止时立即收尾并报告已完成的中间产物。',
           ].join('\n'),
         ),
+        TOOLS_ROW,
       ],
     },
   ]

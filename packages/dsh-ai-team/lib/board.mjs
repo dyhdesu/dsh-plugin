@@ -256,6 +256,7 @@ export function createBoardApi({ store, drive, now = Date.now }) {
         const outcome = await drive.sessionAdapter.dispatchPrompt({
           sessionId: body.sessionId,
           requestId: body.requestId ?? `req-${now().toString(36)}`,
+          mode: body.mode === 'steer' ? 'steer' : 'queue',
           content: typeof body.content === 'string' ? [{ type: 'text', text: body.content }] : body.content ?? [{ type: 'text', text: '继续' }],
         })
         sendJson(res, 200, { ok: true, accepted: outcome?.accepted ?? false, turnId: outcome?.turnId ?? null })

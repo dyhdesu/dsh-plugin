@@ -42,7 +42,7 @@ test('未受管预设调用业务工具被拒绝', async () => {
   const { ctx, registered } = makeCtx()
   registerToolRow(ctx, { store: makeStore(), now: () => 0 })
   await assert.rejects(
-    () => registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, strangerExecution),
+    () => registered.find((d) => d.name === 'ai_team').execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, strangerExecution),
     /未受管/,
   )
 })
@@ -50,16 +50,16 @@ test('未受管预设调用业务工具被拒绝', async () => {
 test('管理员前缀映射为 admin 角色并可创建任务', async () => {
   const { ctx, registered } = makeCtx()
   registerToolRow(ctx, { store: makeStore(), now: () => 0 })
-  const result = await registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, adminExecution)
+  const result = await registered.find((d) => d.name === 'ai_team').execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, adminExecution)
   assert.equal(result.ok, true)
 })
 
 test('worker 前缀映射为 worker 角色:可报告,不可派发', async () => {
   const { ctx, registered } = makeCtx()
   registerToolRow(ctx, { store: makeStore(), now: () => 0 })
-  await registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, adminExecution)
+  await registered.find((d) => d.name === 'ai_team').execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, adminExecution)
   await assert.rejects(
-    () => registered[0].execute({ tool: 'ai_team_dispatch', args: { taskId: 't1', workItemId: 'w1' } }, workerExecution),
+    () => registered.find((d) => d.name === 'ai_team').execute({ tool: 'ai_team_dispatch', args: { taskId: 't1', workItemId: 'w1' } }, workerExecution),
     /角色 worker 无权/,
   )
 })
@@ -76,7 +76,7 @@ test('同名前缀 impostor 预设不获得角色', async () => {
   const { ctx, registered } = makeCtx()
   registerToolRow(ctx, { store: makeStore(), now: () => 0 })
   await assert.rejects(
-    () => registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, prefixImpostorExecution),
+    () => registered.find((d) => d.name === 'ai_team').execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, prefixImpostorExecution),
     /未受管/,
   )
 })

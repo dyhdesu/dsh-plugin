@@ -5,7 +5,9 @@ const QUEUE_ACTION_REMOVE = 'remove'
 export function createSessionAdapter({ sessionController }) {
   async function ensureSession({ sessionId, workspaceId, cwd, agentPreset }) {
     // workspaceId 与 cwd 二选一,创建/收养幂等由宿主保证(sessionId 收养 + cwd/preset 漂移校验)
-    const request = sessionId ? { sessionId, agentPreset } : {}
+    const request = {}
+    if (sessionId !== undefined) request.sessionId = sessionId
+    if (agentPreset !== undefined) request.agentPreset = agentPreset
     if (workspaceId !== undefined) request.workspaceId = workspaceId
     else if (cwd !== undefined) request.cwd = cwd
     return sessionController.create(request)

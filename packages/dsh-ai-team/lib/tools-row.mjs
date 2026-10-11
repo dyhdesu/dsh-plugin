@@ -9,6 +9,13 @@ const TOOL_DESCRIPTION = 'AI 团队任务控制室工具(create/authorize/dispat
 
 export function registerToolRow(ctx, deps) {
   const tools = createAgentTools(deps)
+  // 对照探针:验证全局注册路径是否进会话工具表(无 guard,同名族)
+  const probeDisposer = ctx.tools.register({
+    name: 'ai_team_probe',
+    description: 'AI 团队工具面探针',
+    parameters: { type: 'object', properties: {} },
+    async execute() { return { ok: true } },
+  })
   const disposer = ctx.tools.register({
     name: TOOL_NAME,
     description: TOOL_DESCRIPTION,
@@ -25,7 +32,7 @@ export function registerToolRow(ctx, deps) {
     if (name !== TOOL_NAME) return undefined
     return roleOf(execution) ? undefined : 'AI 团队工具仅限受管角色预设会话'
   })
-  return () => { disposer(); restrict() }
+  return () => { probeDisposer(); disposer(); restrict() }
 }
 
 function roleOf(execution) {

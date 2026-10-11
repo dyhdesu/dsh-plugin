@@ -26,5 +26,12 @@ export function createSessionAdapter({ sessionController }) {
     return Promise.all([result, queue]).then(([cancelValue]) => cancelValue)
   }
 
-  return { ensureSession, dispatchPrompt, cancelSession }
+  // 事件流归并:消费宿主 follow 流,把原始 wire 事件回调给归并方;turn 生命周期驱动 Run 终态
+  async function* followSessionEvents(sessionId, signal) {
+    for await (const frame of sessionController.follow({ address: { kind: 'session', sessionId } }, signal)) {
+      if (frame.type === 'event') yield frame.event
+    }
+  }
+
+  return { ensureSession, dispatchPrompt, cancelSession, followSessionEvents }
 }

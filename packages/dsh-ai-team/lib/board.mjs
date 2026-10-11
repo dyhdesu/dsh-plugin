@@ -4,7 +4,7 @@ import { queryBoard, projectTaskDetail } from './core/query.mjs'
 import { stopAll, recordStopOperation } from './core/global-control.mjs'
 import { stopTask, confirmStopped, hasActiveRuns, submitReport } from './core/task.mjs'
 import { createSettings, saveSettings } from './core/settings.mjs'
-import { dispatchRun } from './core/orchestrator.mjs'
+import { dispatchRun, interruptTask } from './core/orchestrator.mjs'
 import { createTask, defineWorkItem, authorizeTask } from './core/task.mjs'
 
 function sendJson(res, status, payload) {
@@ -130,6 +130,16 @@ export function createBoardApi({ store, drive, now = Date.now }) {
         sendJson(res, 409, { error: stopped.message })
         return
       }
+      // 在途 Run:取消会话 turn 与队列(cancelSession),事件归并负责终态收敛
+      if (drive?.sessionAdapter && hasActiveRuns(stopped.result.aggregate)) {
+        const outcome = await interruptTask(store, stopped.result.aggregate, { sessionAdapter: drive.sessionAdapter })
+        if (outcome.ok) {
+          await store.saveAggregate(outcome.aggregate)
+          const final2 = await store.loadAggregate(body.taskId)
+          sendJson(res, 200, { accepted: true, controlState: final2.control.state, pendingStop: hasActiveRuns(final2), cancelErrors: outcome.cancelErrors })
+          return
+        }
+      }
       await store.saveAggregate(stopped.result.aggregate)
       const noActive = !hasActiveRuns(stopped.result.aggregate)
       const confirmed = noActive ? confirmStopped(stopped.result.aggregate) : null
@@ -248,13 +258,24 @@ export function createBoardApi({ store, drive, now = Date.now }) {
           return
         }
         await store.saveAggregate(outcome.aggregate)
+        drive?.followRuns?.(body.taskId, outcome.sessionId)
         sendJson(res, 200, { ok: true, runId: outcome.runId, sessionId: outcome.sessionId, state: outcome.aggregate.runs[outcome.runId]?.state })
         return
       }
       if (body.action === 'prompt') {
         if (!drive.sessionAdapter) return sendJson(res, 501, { error: '会话适配未装配' })
+        let sessionId = body.sessionId
+        if (!sessionId && body.preset) {
+          const created = await drive.sessionAdapter.ensureSession({ cwd: body.sessionCwd ?? '.', agentPreset: body.preset })
+          sessionId = created?.sessionId
+          if (!sessionId) {
+            sendJson(res, 500, { error: '会话创建未返回 sessionId', debug: JSON.stringify(created)?.slice(0, 200) })
+            return
+          }
+        }
+        if (!sessionId) return sendJson(res, 400, { error: '缺少 sessionId 或 preset' })
         const outcome = await drive.sessionAdapter.dispatchPrompt({
-          sessionId: body.sessionId,
+          sessionId,
           requestId: body.requestId ?? `req-${now().toString(36)}`,
           mode: body.mode === 'steer' ? 'steer' : 'queue',
           content: typeof body.content === 'string' ? [{ type: 'text', text: body.content }] : body.content ?? [{ type: 'text', text: '继续' }],

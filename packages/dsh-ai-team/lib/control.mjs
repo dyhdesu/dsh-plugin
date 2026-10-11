@@ -7,6 +7,7 @@ import { registerToolRow } from './tools-row.mjs'
 import { presetDefinitions } from './presets.mjs'
 import { updateControlRecord, updateIndexRecord, updateSettingsRecord } from './store.mjs'
 import { createGlobalControl } from './core/global-control.mjs'
+import { applySessionEvent } from './core/orchestrator.mjs'
 import { createSettings } from './core/settings.mjs'
 
 const TASK_TABLE_SCHEMA = z.any()
@@ -55,10 +56,32 @@ export function registerControl(ctx) {
     }
 
     // sessionController 挂宿主顶层 ctx(探针留档);经 inject 门控就绪后装配会话面,缺失即干净禁用
-    const driveRef = { sessionAdapter: null }
+    const driveRef = { sessionAdapter: null, followRuns: null }
     ctx.inject(['sessionController'], (sessionScope) => {
       if (stopped) return
-      driveRef.sessionAdapter = createSessionAdapter({ sessionController: sessionScope.sessionController ?? ctx.sessionController })
+      const sessionAdapter = createSessionAdapter({ sessionController: sessionScope.sessionController ?? ctx.sessionController })
+      driveRef.sessionAdapter = sessionAdapter
+      // 事件归并:每会话一条 follow 流,turn 生命周期驱动 Run 状态(pendingStop 收敛依赖于此)
+      const following = new Set()
+      driveRef.followRuns = (taskId, sessionId) => {
+        if (following.has(sessionId) || stopped) return
+        following.add(sessionId)
+        const controller = new AbortController()
+        ;(async () => {
+          for await (const event of sessionAdapter.followSessionEvents(sessionId, controller.signal)) {
+            const agg = await store.loadAggregate(taskId)
+            if (!agg) continue
+            const runIds = Object.values(agg.runs).filter((r) => r.sessionId === sessionId && !['settled', 'rejected'].includes(r.state)).map((r) => r.runId)
+            for (const runId of runIds) {
+              const type = /turn[._\/-]?(start|begin)/i.test(event.type) ? 'turn.start' : /turn[._\/-]?(end|finish|complete|settle)/i.test(event.type) ? 'turn.end' : event.type
+              const outcome = applySessionEvent(agg, { runId, type, at: event.time })
+              if (outcome.ok && !outcome.replayed) await store.saveAggregate(outcome.aggregate)
+            }
+          }
+        })().catch((error) => {
+          if (!stopped) console.warn('[ai-team] follow loop ended:', String(error?.message ?? error).slice(0, 160))
+        }).finally(() => following.delete(sessionId))
+      }
     })
     const settingsInitial = () => createSettings(() => Date.now())
     // 历史污染自愈:记录若为信封形态(values 缺失)视同未初始化

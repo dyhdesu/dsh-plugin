@@ -1,8 +1,8 @@
 # @mzzsfy/dsh-shell-select
 
-Windows shell 链接管:禁用官方 `pwsh` 工具与执行器,替换为可配置多客户端的 `shell` 工具——pwsh / git bash / cmd / WSL / 任意第三方实现,自定义路径,多个客户端并存,设默认,模型经工具参数按名选择。
+Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执行器，提供可配置多客户端的 `shell` 工具——pwsh / git bash / cmd / WSL / 任意第三方实现，自定义路径，多个客户端并存，设默认，模型经工具参数按名选择。会话预设内的官方 `pwsh` 不在工具屏蔽范围。
 
-**宿主要求 ≥ 0.1.7-rc.1**:预设面用 preset-* 声明行(patch 引用 `@deepseek-ai/dsh-agent-preset`,0.1.7 起提供);装到更旧宿主会因该包缺失导致组合树加载失败——0.1.5 及以下请勿安装本包。
+**宿主要求 ≥ 0.1.7-rc.1**:保留现有 settings/行配置契约的最低版本要求。已移除会话预设声明和 `@deepseek-ai/dsh-agent-preset` 依赖，不扩大旧宿主兼容范围。
 
 ## 工作方式
 
@@ -10,7 +10,7 @@ Windows shell 链接管:禁用官方 `pwsh` 工具与执行器,替换为可配�
 - 配置事实源 = 主行 Config(dsh 0.1.7 settings 面以 profile 条目为存储,ns `shell-select`);配置仅经宿主 settings JSON(settings.yaml / settings 面)读写,浏览器侧不注入宿主设置页 UI,写路径 `settings.replace`,配置变更由 cordis 行重载活生效(工具描述随行重建即时更新)。
 - client 半区 `dsh.client.inject` 声明(官方机制,dsh-client-file-upload 等官方包同款):保证 client 运行时模块表中 `primitives`/`slots` 面在场;primitives 另有 try/catch 降级自绘兜底。
 - 本包执行器完整实现官方 `ctx.shell` seam(`resolve`/`run`/`start`/`runFor`/`startFor`/`entryFor`/`sandboxMode`),结构官方 PwshLocalExecutor 同构(实例状态/方法全公有——cordis 服务代理会把经 `ctx.shell` 调用的方法 `this` 重定向到阴影对象,`#` 私有触发品牌检查错误)。
-- preset 面收口(0.1.7 架构):agent 面整体移入会话预设(preset-* 声明行内联 roster,web 表面在根组合树禁用全部 agent 工具行)。本包 patch insert 自带预设 `shell-select`(standard 内联 roster 全量 − tool-pwsh 行,逐项同构官方 standard.patch.yml)并覆写 `agent-preset-registry` 的 default:win32 默认预设切到本包预设(POSIX 保持 standard,行为与上游一致)。用户显式选择其他预设恒优先——官方 minimal/cordis/ptc 预设自带 persistent pwsh 终端链,显式选用时不在接管范围。上游预设漂移由 `test/preset-drift.test.mjs` 逐行守卫,升级后按官方实文对表。
+- **不管理会话预设**:bundle 补丁仅插入主行、guard、web，不声明 `shell-select` 预设，不覆写 `agent-preset-registry` 默认值。宿主及用户选择的预设保持原样；预设作用域注册的同名 `pwsh` 优先于本包根作用域的短描述工具，因此 `shell` 与官方 `pwsh` 可以同时可见，本包不保证屏蔽模型直接调用 `pwsh`。已存活代理及其子代理可继续持有旧预设修订；部署若显式指定已删除的 `shell-select` 预设，应通过宿主预设选择入口改选现存预设，本包不保留别名或迁移路径。
 - 沙箱语义官方同构:`danger-full-access` 直跑;受限模式经 `ctx.sandbox.confine` 包装并按官方方言分类拒绝/runner 失败,权限模型不变。
 - 死态自愈:用户 patch 层禁用主行的窗口(接管中 runtime-disable 残留)内,guard 哨兵(id 含 `/`,市场不写该层)代挂官方 `dsh-tool-pwsh` + `dsh-pwsh-sandbox` 恢复 host 面服务与 boot 组合(预载失败退避重试,至多 3 次),任一方复活先卸代挂。哨兵/复活让位语义逐项同构 `dsh-llm-pi-gateway`。边界:cordis 服务按 fiber 树解析,代挂对 agent preset 作用域不可见,死态窗口新会话的 preset tool-pwsh 行拒挂(报错清晰)属预期。
 - escape hatch(用户想用官方 pwsh 链):market 禁用 shell-select 或 user patch 写 `- id: shell-select / disabled: true`——主行退场后官方行保持启用自服务,重启后官方自然回归;删除禁行重启即恢复接管。(官方两行带平台表达式,行级 `disabled: false` 与宿主默认启用同形,不作让位信号。)
@@ -64,7 +64,7 @@ env 优先级(同键高右):内置覆盖集(NO_COLOR/PAGER/GIT_PAGER)< 条目 `e
 
 - 配置节顶层 `deny`:正则字符串数组,对模型提交的整条命令文本匹配(大小写不敏感),命中即拒绝——**deny 绝对,无豁免语义**;空数组 = 不拦截(出厂默认)。
 - 精细放行在模式内用正则前瞻表达:`deny: ['rm -rf\\s+(?!\\S*node_modules)']` 禁 rm -rf 但放行清依赖目录;默认放行系统下独立 allow 列表的唯一语义就是覆盖 deny,与"deny 绝对"矛盾,故不设。
-- 拦截点在执行器 runFor/startFor 入口:经 `ctx.shell` 代理的消费方(如 hooks 桥)与 preset 预设切换前的官方 pwsh 工具同样受管。拒绝以模型可见标记返回:`[blocked by shell-select: matches deny pattern …]`,后台任务在启动前同步拒绝,不产生僵尸任务。
+- 拦截点在执行器 runFor/startFor 入口:经本包 `ctx.shell` 代理的消费方(如 hooks 桥)与预设内消费该服务的官方 pwsh 工具同样受管。拒绝以模型可见标记返回:`[blocked by shell-select: matches deny pattern …]`,后台任务在启动前同步拒绝,不产生僵尸任务。
 - 定位是防误触护栏而非安全边界:整文本正则挡不住间接包装(编码/嵌套壳),真正的边界始终是访问模式与沙箱。坏正则条目容错跳过,不瘫执行链。
 
 ### bash 形探测与 msys2
@@ -95,7 +95,7 @@ env 优先级(同键高右):内置覆盖集(NO_COLOR/PAGER/GIT_PAGER)< 条目 `e
 
 ## dsh 版本兼容
 
-宿主要求 ≥0.1.7-rc.1:bundle patch 引用 0.1.7 才有的 @deepseek-ai/dsh-agent-preset 宿主包,更旧宿主安装即 boot 失败(2026-09-27 裁定不视为缺陷)。
+宿主要求仍为 ≥0.1.7-rc.1；当前补丁不再引用预设声明模块。以下为历史兼容验收记录，删除预设后的行为以当前「工作方式」为准。
 
 - 0.2.0-rc.2:完全适配(设置面通过;LLM 工具调用格 2026-10-08 经 echo-upstream -tool 场景真机解锁:放行路径 [shell: <id>] 尾标 ✓,deny 拦截 spawn 未发生 ✓——拦截文案被宿主工具输出校验吞为 INVALID_TOOL_OUTPUT,登记 FIND-020-3 P3 不修)
 - 0.1.7-rc.2:不崩溃底线通过(全家桶 crash-only)

@@ -1,6 +1,6 @@
 # @mzzsfy/dsh-shell-select
 
-Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执行器，提供可配置多客户端的 `shell` 工具——pwsh / git bash / cmd / WSL / 任意第三方实现，自定义路径，多个客户端并存，设默认，模型经工具参数按名选择。会话预设内的官方 `pwsh` 不在工具屏蔽范围。
+Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执行器，提供可配置多客户端的 `shell` 工具——pwsh / git bash / cmd / WSL / 任意第三方实现，自定义路径，多个客户端并存，设默认，模型经工具参数按名选择。执行器活跃且会话可见 `shell` 时，模型工具定义不再暴露 `pwsh`，包括官方预设内的同名工具。
 
 **宿主要求 ≥ 0.1.7-rc.1**:保留现有 settings/行配置契约的最低版本要求。已移除会话预设声明和 `@deepseek-ai/dsh-agent-preset` 依赖，不扩大旧宿主兼容范围。
 
@@ -10,7 +10,8 @@ Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执�
 - 配置事实源 = 主行 Config(dsh 0.1.7 settings 面以 profile 条目为存储,ns `shell-select`);配置仅经宿主 settings JSON(settings.yaml / settings 面)读写,浏览器侧不注入宿主设置页 UI,写路径 `settings.replace`,配置变更由 cordis 行重载活生效(工具描述随行重建即时更新)。
 - client 半区 `dsh.client.inject` 声明(官方机制,dsh-client-file-upload 等官方包同款):保证 client 运行时模块表中 `primitives`/`slots` 面在场;primitives 另有 try/catch 降级自绘兜底。
 - 本包执行器完整实现官方 `ctx.shell` seam(`resolve`/`run`/`start`/`runFor`/`startFor`/`entryFor`/`sandboxMode`),结构官方 PwshLocalExecutor 同构(实例状态/方法全公有——cordis 服务代理会把经 `ctx.shell` 调用的方法 `this` 重定向到阴影对象,`#` 私有触发品牌检查错误)。
-- **不管理会话预设**:bundle 补丁仅插入主行、guard、web，不声明 `shell-select` 预设，不覆写 `agent-preset-registry` 默认值。宿主及用户选择的预设保持原样；预设作用域注册的同名 `pwsh` 优先于本包根作用域的短描述工具，因此 `shell` 与官方 `pwsh` 可以同时可见，本包不保证屏蔽模型直接调用 `pwsh`。已存活代理及其子代理可继续持有旧预设修订；部署若显式指定已删除的 `shell-select` 预设，应通过宿主预设选择入口改选现存预设，本包不保留别名或迁移路径。
+- **不管理会话预设**:bundle 补丁仅插入主行、guard、web，不声明 `shell-select` 预设，不覆写 `agent-preset-registry` 默认值。宿主及用户选择的预设保持原样，已存活代理及其子代理可继续持有旧预设修订；部署若显式指定已删除的 `shell-select` 预设，应通过宿主预设选择入口改选现存预设，本包不保留别名或迁移路径。
+- **只隐藏模型展示，不禁执行能力**:执行器生命周期内通过官方 `system-prompt/assemble` 最终投影删除 `pwsh` 工具 schema 与重复的 `tool:pwsh` 段；native/both 移除模型工具 schema，PTC/both 重建 TypeScript/Python SDK，SDK 使用宿主公开 renderer 重建，不改官方预设、不添加禁止调用提示词。下一次模型步骤重新组装时生效，已发送请求不追溯修改。工具注册和 PowerShell 执行契约仍保留，旧/在途调用及历史卡不受影响；这是减少模型选择与提示成本的展示策略，不是硬拒绝，模型仍可能凭历史猜名调用。若该代理看不到 `shell`（如子代理工具允许集仅保留 `pwsh`），原展示保持不变，避免失去唯一终端；SDK renderer 不可用时整体不改并告警。执行器卸载自动移除投影监听。
 - 沙箱语义官方同构:`danger-full-access` 直跑;受限模式经 `ctx.sandbox.confine` 包装并按官方方言分类拒绝/runner 失败,权限模型不变。
 - 死态自愈:用户 patch 层禁用主行的窗口(接管中 runtime-disable 残留)内,guard 哨兵(id 含 `/`,市场不写该层)代挂官方 `dsh-tool-pwsh` + `dsh-pwsh-sandbox` 恢复 host 面服务与 boot 组合(预载失败退避重试,至多 3 次),任一方复活先卸代挂。哨兵/复活让位语义逐项同构 `dsh-llm-pi-gateway`。边界:cordis 服务按 fiber 树解析,代挂对 agent preset 作用域不可见,死态窗口新会话的 preset tool-pwsh 行拒挂(报错清晰)属预期。
 - escape hatch(用户想用官方 pwsh 链):market 禁用 shell-select 或 user patch 写 `- id: shell-select / disabled: true`——主行退场后官方行保持启用自服务,重启后官方自然回归;删除禁行重启即恢复接管。(官方两行带平台表达式,行级 `disabled: false` 与宿主默认启用同形,不作让位信号。)

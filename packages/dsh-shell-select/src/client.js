@@ -86,6 +86,121 @@ window.__ModuleLoader__.load({
     }
     // LOGIC-END clientDisplayName
 
+    // 仅在宿主明确报告 Windows 后,把可识别的 MSYS 路径映射回宿主文件路径。
+    // 文件地址本身不经 URL round-trip,避免改写未识别的编码与后缀。
+    // LOGIC-BEGIN msysToHostPath
+    function msysToHostPath(value, facts) {
+      if (typeof value !== 'string' || value === '') return value
+      const env = facts ?? {}
+      if (env.home && (value === '~' || value.startsWith('~/'))) {
+        return value === '~' ? env.home : `${env.home}/${value.slice(2)}`
+      }
+      const drive = /^\/([a-z])\/(.*)$/i.exec(value)
+      if (drive !== null) return `${drive[1].toUpperCase()}:/${drive[2]}`
+      const bareDrive = /^\/([a-z])$/i.exec(value)
+      if (bareDrive !== null) return `${bareDrive[1].toUpperCase()}:/`
+      if (env.tmpDir && (value === '/tmp' || value.startsWith('/tmp/'))) {
+        return value === '/tmp' ? env.tmpDir : env.tmpDir + value.slice(4)
+      }
+      return value
+    }
+    // LOGIC-END msysToHostPath
+
+    // LOGIC-BEGIN rescueFileAddress
+    function rescueFileAddress(address, msysToHostPath, facts) {
+      const prefix = 'dsh-resource://file/'
+      if (typeof address !== 'string' || !address.startsWith(prefix)) return address
+      const tail = address.slice(prefix.length)
+      const cut = tail.search(/[?#]/)
+      const suffix = cut === -1 ? '' : tail.slice(cut)
+      const parts = (cut === -1 ? tail : tail.slice(0, cut)).split('/')
+      const scope = parts.shift()
+      if (scope !== 'session' && scope !== 'absolute') return address
+      const sessionId = scope === 'session' ? parts.shift() : undefined
+      if (scope === 'session' && (!sessionId || parts.length === 0)) return address
+      let decodedSessionId = sessionId
+      if (scope === 'session') {
+        try {
+          decodedSessionId = decodeURIComponent(sessionId)
+        } catch {
+          return address
+        }
+      }
+      let segments
+      try {
+        segments = parts.map(decodeURIComponent)
+      } catch {
+        return address
+      }
+      if (scope === 'absolute' && segments[0] === '' && segments.length > 1) return address
+      const path = scope === 'absolute' ? `/${segments.join('/')}` : segments.join('/')
+      const translated = msysToHostPath(path, facts)
+      if (translated === path) return address
+      const encoded = translated.split('/').map((segment) => encodeURIComponent(segment).replace(/%3A/gi, ':')).join('/')
+      const rebuilt = scope === 'session'
+        ? `${prefix}session/${encodeURIComponent(decodedSessionId)}/${encoded}`
+        : `${prefix}absolute/${encoded.replace(/^\/+/, '')}`
+      return rebuilt + suffix
+    }
+    // LOGIC-END rescueFileAddress
+
+    const PATHMAP_URL = '/api/shell-select/pathmap'
+    let pathMap = null
+    let pathMapRequested = false
+    function loadPathMap() {
+      if (pathMapRequested) return
+      pathMapRequested = true
+      fetch(PATHMAP_URL, { headers: { accept: 'application/json' } })
+        .then((response) => response.ok ? response.json() : null)
+        .then((facts) => {
+          if (facts && typeof facts.platform === 'string') pathMap = facts
+          else pathMapRequested = false
+        })
+        .catch((error) => {
+          pathMapRequested = false
+          console.warn('shell-select: pathmap fetch failed', error)
+        })
+    }
+    // LOGIC-END loadPathMap
+
+    function installPathRescue(ctx) {
+      if (typeof ctx.inject !== 'function') return
+      loadPathMap()
+      ctx.inject(['sidebarRight'], (sctx) => {
+        const controller = sctx?.sidebarRight
+        if (!controller || controller.shellSelectPathRescue === true || typeof controller.openResource !== 'function') return
+        if (typeof sctx.effect !== 'function') return
+        const openResource = controller.openResource
+        const openResourceIn = controller.openResourceIn
+        let active = true
+        const rescue = (address) => {
+          if (!active) return address
+          if (pathMap === null) loadPathMap()
+          return pathMap?.platform === 'win32'
+            ? rescueFileAddress(address, msysToHostPath, pathMap)
+            : address
+        }
+        controller.openResource = function openResourceWithPathRescue(address, options) {
+          return openResource.call(this, rescue(address), options)
+        }
+        const wrappedOpenResource = controller.openResource
+        if (typeof openResourceIn === 'function') {
+          controller.openResourceIn = function openResourceInWithPathRescue(sessionId, address, options) {
+            return openResourceIn.call(this, sessionId, rescue(address), options)
+          }
+        }
+        const wrappedOpenResourceIn = controller.openResourceIn
+        controller.shellSelectPathRescue = true
+        const restore = () => {
+          active = false
+          if (controller.openResource === wrappedOpenResource) controller.openResource = openResource
+          if (typeof openResourceIn === 'function' && controller.openResourceIn === wrappedOpenResourceIn) controller.openResourceIn = openResourceIn
+          if (controller.shellSelectPathRescue === true) delete controller.shellSelectPathRescue
+        }
+        sctx.effect(() => restore, 'shell-select sidebar path rescue')
+      })
+    }
+
     const CSS = [
       // tool.call.toolview 卡片(key 'shell'):官方 terminal 行同构 + 复制/折行增强。
       // 色彩对齐官方 ToolRow:标题 label-secondary、icon 盒 label-tertiary(实证自
@@ -502,6 +617,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
+        installPathRescue(ctx)
         ctx.effect(() => {
           const style = document.createElement('style')
           // 自带 data-plugin:缺失时宿主 claimStyles 会误收,插件 HMR 重建即误删

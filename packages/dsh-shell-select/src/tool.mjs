@@ -144,8 +144,11 @@ function foregroundOutputProperties() {
   }
 }
 
+/** bash 路径措辞:bash 输出的 MSYS 拼写不得回流进工具参数(宿主文件面只认 Windows 形式)。 */
+const BASH_PATH_GUIDANCE = 'Bash clients accept Windows-style paths (C:/...): use that form for `workdir` and file-tool arguments — MSYS spellings like `/c/Users/...` or `/tmp` only work inside the bash command itself, never in tool arguments.'
+
 /** 工具描述:客户端清单与方言随配置动态变化。 */
-function shellDescription({ executor, backgroundEnabled, escalationModes }) {
+export function shellDescription({ executor, backgroundEnabled, escalationModes }) {
   const listing = executor.listShells()
   const lines = listing.shells
     .map((entry) => `${entry.id} (${entry.kind}${entry.available ? '' : ', executable not found'})`)
@@ -158,8 +161,10 @@ function shellDescription({ executor, backgroundEnabled, escalationModes }) {
     + (backgroundEnabled
       ? 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; read its output with `job_output` and stop it with `job_kill`.'
       : 'Background execution is not available; long-running commands must finish within the timeout.')
-  if (escalationModes.length === 0) return base
-  return base + ' Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. When a command is denied and a wider mode would let it succeed, escalate immediately in the same turn: retry the exact same command once with `sandbox_permissions` (the narrowest wider mode that suffices) plus a one-sentence `justification`. Never escalate speculatively: ground the request in a real denial. If the session states approval prompts are disabled, a denial is final — do not set `sandbox_permissions`.'
+  const bashPresent = listing.shells.some((candidate) => candidate.kind === 'bash' && candidate.available)
+  const text = bashPresent ? `${base} ${BASH_PATH_GUIDANCE}` : base
+  if (escalationModes.length === 0) return text
+  return text + ' Commands may run under a file sandbox; a blocked file operation is reported as `[sandbox: file access denied under <mode> mode]` — a policy denial, not a bug in the command; do not retry another way. When a command is denied and a wider mode would let it succeed, escalate immediately in the same turn: retry the exact same command once with `sandbox_permissions` (the narrowest wider mode that suffices) plus a one-sentence `justification`. Never escalate speculatively: ground the request in a real denial. If the session states approval prompts are disabled, a denial is final — do not set `sandbox_permissions`.'
 }
 
 /** pwsh 工具描述:兼容保留工具,只声明不要调用与去向,零执行语义。 */

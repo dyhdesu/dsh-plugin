@@ -1,5 +1,9 @@
-// board API:/api/ai-team/* 薄分发。数据权威态在 store;中断经 interrupt 协议。
+// board API v2:/api/ai-team/board 只读查询(查询投影契约)+/api/ai-team/interrupt 写路由。
 // 安全边界(全仓库约定):不做 host 认证;写路由跨源防护以 Origin 同源比对为上限。
+import { queryBoard, projectTaskDetail } from './core/query.mjs'
+import { stopAll, recordStopOperation } from './core/global-control.mjs'
+import { stopTask, confirmStopped, hasActiveRuns } from './core/task.mjs'
+
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(payload))
@@ -44,11 +48,32 @@ function readBody(req) {
   })
 }
 
-export function createBoardApi({ store, interrupt }) {
-  async function handleBoard(req, res) {
+export function createBoardApi({ store, now = Date.now }) {
+  async function handleBoard(req, res, url = new URL(req.url ?? '/api/ai-team/board', 'http://local')) {
     try {
-      const [tasks, control] = await Promise.all([store.listAggregates(), store.loadControl()])
-      sendJson(res, 200, { control, tasks })
+      const [aggregates, control] = await Promise.all([store.listAggregates(), store.loadControl()])
+      const taskId = url.searchParams.get('taskId')
+      if (taskId) {
+        const aggregate = aggregates.find((a) => a.taskId === taskId)
+        if (!aggregate) {
+          sendJson(res, 404, { error: `任务不存在: ${taskId}` })
+          return
+        }
+        sendJson(res, 200, projectTaskDetail(aggregate, control))
+        return
+      }
+      const params = url.searchParams
+      const queried = queryBoard(aggregates, control, {
+        workspaceId: params.get('workspaceId') ?? undefined,
+        search: params.get('search') ?? undefined,
+        cursor: params.get('cursor') ?? undefined,
+        limit: params.has('limit') ? Number(params.get('limit')) : undefined,
+      })
+      if (!queried.ok) {
+        sendJson(res, 400, { error: queried.message })
+        return
+      }
+      sendJson(res, 200, queried.result)
     } catch (error) {
       sendJson(res, error.statusCode ?? 500, { error: error.message })
     }
@@ -65,17 +90,45 @@ export function createBoardApi({ store, interrupt }) {
         sendJson(res, 400, { error: '请求体不是合法 JSON' })
         return
       }
-      const scope = body.global ? { global: true } : { taskId: body.taskId }
-      if (!body.global && !scope.taskId) {
+      if (!body.commandId) {
+        sendJson(res, 400, { error: '缺少 commandId' })
+        return
+      }
+      const payloadHash = body.payloadHash ?? JSON.stringify(body)
+      if (body.global) {
+        let envelope = null
+        await store.updateControl((control) => {
+          envelope = stopAll(control, { commandId: body.commandId, payloadHash, sourceRef: body.sourceRef })
+          return envelope.result.state
+        })
+        if (!envelope.ok) {
+          sendJson(res, 409, { error: envelope.message })
+          return
+        }
+        sendJson(res, 200, { accepted: true, globalStopGeneration: envelope.result.result.globalStopGeneration, replayed: envelope.result.replayed })
+        return
+      }
+      if (!body.taskId) {
         sendJson(res, 400, { error: '缺少 taskId 或 global' })
         return
       }
-      const result = await interrupt(scope)
-      if (!result.accepted) {
-        sendJson(res, 502, { accepted: false, error: result.error })
+      await store.updateControl((control) => recordStopOperation(control, { commandId: body.commandId, taskId: body.taskId, payloadHash, sourceRef: body.sourceRef }).result.state)
+      const aggregate = await store.loadAggregate(body.taskId)
+      if (!aggregate) {
+        sendJson(res, 404, { error: `任务不存在: ${body.taskId}` })
         return
       }
-      sendJson(res, 200, { accepted: true, controlState: result.controlState })
+      const stopped = stopTask(aggregate, { reason: body.reason ?? 'user_interrupt' })
+      if (!stopped.ok) {
+        sendJson(res, 409, { error: stopped.message })
+        return
+      }
+      await store.saveAggregate(stopped.result.aggregate)
+      const noActive = !hasActiveRuns(stopped.result.aggregate)
+      const confirmed = noActive ? confirmStopped(stopped.result.aggregate) : null
+      const final = confirmed?.ok ? confirmed.result.aggregate : stopped.result.aggregate
+      if (confirmed?.ok) await store.saveAggregate(final)
+      sendJson(res, 200, { accepted: true, controlState: final.control.state, pendingStop: !noActive })
     } catch (error) {
       sendJson(res, error.statusCode ?? 500, { error: error.message })
     }

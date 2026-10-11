@@ -40,24 +40,24 @@ const prefixImpostorExecution = { agent: { agentPreset: { id: 'ai-team-worker-ro
 
 test('未受管预设调用业务工具被拒绝', async () => {
   const { ctx, registered } = makeCtx()
-  registerToolRow(ctx, { store: makeStore(), sendPrompt: async () => ({ accepted: true }), now: () => 0 })
+  registerToolRow(ctx, { store: makeStore(), now: () => 0 })
   await assert.rejects(
-    () => registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', goal: 'g' } }, strangerExecution),
+    () => registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, strangerExecution),
     /未受管/,
   )
 })
 
 test('管理员前缀映射为 admin 角色并可创建任务', async () => {
   const { ctx, registered } = makeCtx()
-  registerToolRow(ctx, { store: makeStore(), sendPrompt: async () => ({ accepted: true }), now: () => 0 })
-  const result = await registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', goal: 'g' } }, adminExecution)
+  registerToolRow(ctx, { store: makeStore(), now: () => 0 })
+  const result = await registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, adminExecution)
   assert.equal(result.ok, true)
 })
 
 test('worker 前缀映射为 worker 角色:可报告,不可派发', async () => {
   const { ctx, registered } = makeCtx()
-  registerToolRow(ctx, { store: makeStore(), sendPrompt: async () => ({ accepted: true }), now: () => 0 })
-  await registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', goal: 'g' } }, adminExecution)
+  registerToolRow(ctx, { store: makeStore(), now: () => 0 })
+  await registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, adminExecution)
   await assert.rejects(
     () => registered[0].execute({ tool: 'ai_team_dispatch', args: { taskId: 't1', workItemId: 'w1' } }, workerExecution),
     /角色 worker 无权/,
@@ -66,7 +66,7 @@ test('worker 前缀映射为 worker 角色:可报告,不可派发', async () => 
 
 test('guard 对未受管会话的本工具调用给出拒绝理由', () => {
   const { ctx, guards } = makeCtx()
-  registerToolRow(ctx, { store: makeStore(), sendPrompt: async () => ({ accepted: true }), now: () => 0 })
+  registerToolRow(ctx, { store: makeStore(), now: () => 0 })
   assert.match(guards[0]({ name: 'ai_team', ...strangerExecution }), /仅限受管/)
   assert.equal(guards[0]({ name: 'ai_team', ...adminExecution }), undefined)
   assert.equal(guards[0]({ name: 'other_tool', ...strangerExecution }), undefined)
@@ -74,9 +74,9 @@ test('guard 对未受管会话的本工具调用给出拒绝理由', () => {
 
 test('同名前缀 impostor 预设不获得角色', async () => {
   const { ctx, registered } = makeCtx()
-  registerToolRow(ctx, { store: makeStore(), sendPrompt: async () => ({ accepted: true }), now: () => 0 })
+  registerToolRow(ctx, { store: makeStore(), now: () => 0 })
   await assert.rejects(
-    () => registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', goal: 'g' } }, prefixImpostorExecution),
+    () => registered[0].execute({ tool: 'ai_team_create_task', args: { taskId: 't1', title: 't', projectWorkspaceId: 'w', definition: { goal: 'g' } } }, prefixImpostorExecution),
     /未受管/,
   )
 })

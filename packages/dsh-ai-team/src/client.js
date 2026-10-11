@@ -42,6 +42,14 @@ window.__ModuleLoader__.load({
 .at-col__head{font:600 13px/20px var(--dsw-font-family,sans-serif);display:flex;gap:6px;align-items:baseline}
 .at-col__count{font:400 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-caption,#adb2b8);font-variant-numeric:tabular-nums}
 .at-card{border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.1));border-radius:6px;background:var(--dsw-alias-bg-base,#fff);padding:10px 12px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:4px;color:inherit;font:inherit}
+.at-run{border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.08));border-radius:6px;padding:8px 10px;margin-bottom:8px;display:flex;flex-direction:column;gap:4px}
+.at-run__head{display:flex;gap:8px;align-items:center}
+.at-pill{border-radius:999px;padding:1px 8px;font-size:12px;border:1px solid var(--dsw-alias-border-l2,rgba(0,0,0,.15))}
+.at-pill--settled,.at-pill--interrupted{background:rgba(0,0,0,.04)}
+.at-pill--submitted,.at-pill--running{background:rgba(48,119,235,.12)}
+.at-pill--rejected{background:rgba(214,69,69,.12)}
+.at-run__seg{display:flex;gap:12px;font-size:12px;color:var(--dsw-alias-text-secondary,rgba(0,0,0,.55))}
+.at-run__meta{display:flex;gap:12px;font-size:12px;color:var(--dsw-alias-text-secondary,rgba(0,0,0,.55))}
 .at-card:hover,.at-card--on{outline:1px solid var(--dsw-alias-border-l3,rgba(0,0,0,.25))}
 .at-card__title{font:500 13px/20px var(--dsw-font-family,sans-serif);word-break:break-word}
 .at-card__meta{font:400 12px/18px var(--dsw-font-family,sans-serif);color:var(--dsw-alias-label-tertiary,#81858c);word-break:break-word}
@@ -205,8 +213,18 @@ window.__ModuleLoader__.load({
           selectedTask
             ? h('div', { className: 'at-detail__body' },
               (selectedTask.runs ?? []).length === 0 ? h('span', { className: 'at-empty' }, '该任务暂无执行记录') :
-                (selectedTask.runs ?? []).map((r) => h('span', { key: r.runId },
-                  `${r.runId} · ${r.phase} · ${r.state}${r.startedAt ? ' · 起 ' + new Date(r.startedAt).toLocaleTimeString() : ' · 未实际开始'}${r.endedAt ? ' · 止 ' + new Date(r.endedAt).toLocaleTimeString() : ''}`)))
+                (selectedTask.runs ?? []).map((r) => h('div', { key: r.runId, className: 'at-run' },
+                  h('div', { className: 'at-run__head' },
+                    h('strong', null, `${r.runId} · ${r.phase}`),
+                    h('span', { className: `at-pill at-pill--${r.state}` }, r.state)),
+                  h('div', { className: 'at-run__seg' },
+                    r.startedAt ? h('span', { className: 'at-run__seg-start' }, `起 ${new Date(r.startedAt).toLocaleTimeString()}`) : h('span', { className: 'at-empty' }, '未实际开始'),
+                    r.endedAt ? h('span', { className: 'at-run__seg-end' }, `止 ${new Date(r.endedAt).toLocaleTimeString()}`) : null,
+                    r.startedAt && r.endedAt ? h('span', { className: 'at-run__seg-dur' }, `历时 ${Math.max(0, Math.round((r.endedAt - r.startedAt) / 1000))}s`) : null),
+                  h('div', { className: 'at-run__meta' },
+                    r.tokenTotal !== null && r.tokenTotal !== undefined ? h('span', null, `tokens ${r.tokenTotal}`) : null,
+                    h('span', null, `usage ${r.usageCoverage ?? 'unknown'}`),
+                    r.stopObserved ? h('span', null, `stop ${r.stopObserved}`) : null))))
             : h('span', { className: 'at-empty' }, '在看板中选中任务后显示其执行时间线'),
         ) : null,
         tab === 'models' ? h('div', { className: 'at-detail' },

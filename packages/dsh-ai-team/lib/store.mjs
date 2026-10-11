@@ -45,11 +45,20 @@ const MISSING_KEY = /missing[- ]key/i
 
 // 控制记录 RMW:missing-key 才允许以 initial 兜底首写,其余错误原样抛出(防清空既有控制态)
 export async function updateControlRecord(handle, fn, initial) {
+  return updateRecordWithSeed(handle, 'control', fn, initial)
+}
+
+// 设置记录 RMW:与控制记录同款 missing-key 兜底
+export async function updateSettingsRecord(handle, fn, initial) {
+  return updateRecordWithSeed(handle, 'settings', fn, initial)
+}
+
+async function updateRecordWithSeed(handle, key, fn, initial) {
   try {
-    return await handle.update('control', (current) => fn(current ?? initial))
+    return await handle.update(key, (current) => fn(current ?? initial))
   } catch (error) {
     if (!MISSING_KEY.test(String(error?.code ?? error?.name ?? error?.message))) throw error
-    await handle.put('control', fn(initial))
-    return handle.get('control')
+    await handle.put(key, fn(initial))
+    return handle.get(key)
   }
 }

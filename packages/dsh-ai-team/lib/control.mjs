@@ -5,8 +5,9 @@ import { createBoardApi } from './board.mjs'
 import { createSessionAdapter } from './session-adapter.mjs'
 import { registerToolRow } from './tools-row.mjs'
 import { presetDefinitions } from './presets.mjs'
-import { updateControlRecord } from './store.mjs'
+import { updateControlRecord, updateSettingsRecord } from './store.mjs'
 import { createGlobalControl } from './core/global-control.mjs'
+import { createSettings } from './core/settings.mjs'
 
 const TASK_TABLE_SCHEMA = z.any()
 
@@ -47,9 +48,13 @@ export function registerControl(ctx) {
       return Promise.all(ids.map((id) => store.loadAggregate(id)))
     }
 
-    const api = createBoardApi({ store: { ...store, listAggregates }, now: () => Date.now() })
+    const settingsInitial = () => createSettings(() => Date.now())
+    // 历史污染自愈:记录若为信封形态(values 缺失)视同未初始化
+    const unwrapSettings = (s) => (s && s.values ? s : null)
+    const api = createBoardApi({ store: { ...store, listAggregates, settings: true, loadSettings: () => Promise.resolve(unwrapSettings(table.get('settings')) ?? settingsInitial()), updateSettings: (fn) => updateSettingsRecord(table, (cur) => fn(unwrapSettings(cur) ?? settingsInitial()), settingsInitial()) }, now: () => Date.now() })
     ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/board', handler: api.handleBoard }), 'ai-team board')
     ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/interrupt', handler: api.handleInterrupt }), 'ai-team interrupt')
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/settings', handler: api.handleSettings }), 'ai-team settings')
     // 业务工具注册进全局工具面;guard 按预设精确 id 拒绝非受管会话(tools-row)
     ctx.effect(registerToolRow(ctx, { store, now: () => Date.now() }))
     // 角色预设:管理员/调度员/实施(persona 只含角色边界,不含 shell/写文件/委派)

@@ -3,6 +3,7 @@
 import { queryBoard, projectTaskDetail } from './core/query.mjs'
 import { stopAll, recordStopOperation } from './core/global-control.mjs'
 import { stopTask, confirmStopped, hasActiveRuns } from './core/task.mjs'
+import { createSettings, saveSettings } from './core/settings.mjs'
 
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
@@ -63,6 +64,10 @@ export function createBoardApi({ store, now = Date.now }) {
         return
       }
       const params = url.searchParams
+      if (params.get('settings') === '1') {
+        sendJson(res, 200, store.settings ? await store.loadSettings() : createSettings(now))
+        return
+      }
       const queried = queryBoard(aggregates, control, {
         workspaceId: params.get('workspaceId') ?? undefined,
         search: params.get('search') ?? undefined,
@@ -134,5 +139,42 @@ export function createBoardApi({ store, now = Date.now }) {
     }
   }
 
-  return { handleBoard, handleInterrupt }
+  async function handleSettings(req, res) {
+    try {
+      if (rejectCrossOrigin(req, res)) return
+      if (req.method === 'GET') {
+        sendJson(res, 200, store.settings ? await store.loadSettings() : createSettings(now))
+        return
+      }
+      const raw = await readBody(req).catch((error) => { throw Object.assign(error, { statusCode: error.statusCode ?? 400 }) })
+      let body = {}
+      try {
+        body = raw ? JSON.parse(raw) : {}
+      } catch {
+        sendJson(res, 400, { error: '请求体不是合法 JSON' })
+        return
+      }
+      if (!store.settings) {
+        sendJson(res, 501, { error: '设置存储未装配' })
+        return
+      }
+      let envelope = null
+      let current = null
+      const outcome = await store.updateSettings((existing) => {
+        current = existing
+        envelope = saveSettings(existing, body)
+        return envelope.ok ? envelope.result : existing
+      })
+      if (!envelope.ok) {
+        sendJson(res, 409, { error: envelope.message, code: envelope.code, current })
+        return
+      }
+      const saved = outcome?.values ? outcome : outcome?.result?.values ? outcome.result : outcome?.result
+      sendJson(res, 200, saved)
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, { error: error.message })
+    }
+  }
+
+  return { handleBoard, handleInterrupt, handleSettings }
 }

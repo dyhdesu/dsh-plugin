@@ -61,6 +61,9 @@ window.__ModuleLoader__.load({
       const [observedAt, setObservedAt] = useState(null)
       const [search, setSearch] = useState('')
       const [tab, setTab] = useState('board')
+      const [view, setView] = useState('panel')
+      const [settingsDraft, setSettingsDraft] = useState(null)
+      const [settingsNote, setSettingsNote] = useState(null)
       const [selected, setSelected] = useState(null)
       const [writing, setWriting] = useState(false)
       const inflight = useRef(null)
@@ -103,6 +106,30 @@ window.__ModuleLoader__.load({
         }
       }
 
+      async function openSettings() {
+        try {
+          const s = await api.get('board?settings=1')
+          setSettingsDraft({ expectedConfigRevision: s.configRevision, concurrencyReference: s.values.concurrencyReference })
+          setSettingsNote(null)
+          setView('settings')
+        } catch (e) {
+          setSettingsNote('读取失败: ' + (e.message ?? e))
+        }
+      }
+
+      async function saveSettingsView() {
+        try {
+          await api.post('settings', {
+            expectedConfigRevision: settingsDraft.expectedConfigRevision,
+            values: { concurrencyReference: settingsDraft.concurrencyReference },
+          })
+          setSettingsNote('已保存,对下一次角色决策或派发生效;不影响运行中的 Run')
+          await openSettings()
+        } catch (e) {
+          setSettingsNote('保存失败,草稿已保留: ' + (e.message ?? e))
+        }
+      }
+
       const items = data?.items ?? []
       const selectedTask = selected ? items.find((t) => t.taskId === selected) : undefined
       const knownIds = data ? new Set(items.map((t) => t.taskId)) : null
@@ -114,7 +141,26 @@ window.__ModuleLoader__.load({
         h('div', { className: 'at-head' },
           h('span', { className: 'at-head__title' }, 'AI 团队'),
           h('span', { className: 'at-head__caption' }, '只读看板 · 中断入口 · 继续执行请与角色对话'),
+          view === 'panel'
+            ? h('button', { className: 'at-btn', onClick: openSettings }, '设置')
+            : h('button', { className: 'at-btn', onClick: () => setView('panel') }, '返回面板'),
         ),
+        view === 'settings' ? h('div', { className: 'at-detail' },
+          h('div', { className: 'at-detail__head' }, h('strong', null, '设置')),
+          h('div', { className: 'at-detail__body' },
+            h('label', null, '并发参考(留空=未设置,仅提示不硬限): ',
+              h('input', {
+                className: 'at-search', value: settingsDraft?.concurrencyReference ?? '',
+                onChange: (e) => setSettingsDraft((d) => ({ ...d, concurrencyReference: e.target.value === '' ? null : Number(e.target.value) })),
+              })),
+            h('div', { className: 'at-toolbar' },
+              h('button', { className: 'at-btn', disabled: writing || !settingsDraft, onClick: saveSettingsView }, '保存'),
+              h('button', { className: 'at-btn', onClick: () => setView('panel') }, '取消'),
+            ),
+            settingsNote ? h('span', { className: 'at-card__meta' }, settingsNote) : null,
+          ),
+        ) : null,
+        view === 'panel' && h(React.Fragment, null,
         h('div', { className: 'at-banner' },
           loadError
             ? h('span', { className: 'at-banner__error' }, `查询失败,显示旧数据(观察于 ${observedAt ? observedAt.toLocaleTimeString() : '—'})`)
@@ -188,7 +234,7 @@ window.__ModuleLoader__.load({
             h('span', { style: { opacity: 0.7, fontSize: 12 } }, `更新于 ${new Date(selectedTask.updatedAt).toLocaleString()}`),
           ),
         ) : null,
-      )
+        ))
     }
 
     function Panel() {

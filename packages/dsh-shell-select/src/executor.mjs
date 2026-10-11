@@ -20,6 +20,7 @@ import { candidateExists, detectCandidates, resolveEntryPath } from './resolve.m
 import { classifyDenial, classifyRunnerFailure, isRunnerSpawnFailure } from './sandbox-classify.mjs'
 import { registerShellTool } from './tool.mjs'
 import { mountShellPromptProjection } from './prompt-projection.mjs'
+import { mountPwshTakeover } from './pwsh-takeover.mjs'
 
 export const name = 'shell-select'
 
@@ -151,6 +152,7 @@ export const ShellSelectExecutor = class ShellSelectExecutor extends ShellExecut
     this.#registerTool()
     this.#mountPromptSection()
     mountShellPromptProjection(ctx)
+    this.markPwshTakeover = mountPwshTakeover(ctx)
   }
 
   /** 挂载/换源共用落定:入参经宿主按 static Config resolve,volatile 字段是
@@ -283,6 +285,7 @@ export const ShellSelectExecutor = class ShellSelectExecutor extends ShellExecut
 
   /** 官方 execute seam:pwsh 客户端前台执行(dsh-pwsh-local run 同构,契约钉死 pwsh)。 */
   async run(spec) {
+    this.markPwshTakeover()
     return this.runFor(this.contractEntry(), spec)
   }
 
@@ -298,6 +301,7 @@ export const ShellSelectExecutor = class ShellSelectExecutor extends ShellExecut
    * @returns {Promise<object>} ShellExecution 句柄
    */
   async execute(spec) {
+    this.markPwshTakeover()
     this.assertNotDenied(spec.command)
     const entry = this.contractEntry()
     const policy = spec.sandboxPolicy
@@ -441,6 +445,7 @@ export const ShellSelectExecutor = class ShellSelectExecutor extends ShellExecut
 
   /** 官方 start seam:pwsh 客户端后台启动(dsh-pwsh-local start 同构,契约钉死 pwsh)。 */
   start(spec) {
+    this.markPwshTakeover()
     return this.startFor(this.contractEntry(), spec)
   }
 

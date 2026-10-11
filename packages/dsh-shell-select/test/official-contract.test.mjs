@@ -37,6 +37,7 @@ function buildExecutor({ defaultId = 'git-bash', deny = [] } = {}) {
   const jobs = { starts: [] }
   const ctx = {
     reflect: { provide: () => {} },
+    on: () => () => {},
     logger: { warn: () => {} },
     get(service) {
       if (service === 'webServer') return { register: () => {} }
@@ -178,6 +179,19 @@ test('矩阵:后台 pwsh 工具(钉死 pwsh)', async () => {
   await Promise.resolve()
   assert.equal(stub.calls.length, 1)
   assert.deepEqual(stub.calls[0].argv.slice(1, 5), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command'])
+})
+
+test('本包同名 pwsh 工具结果携带接管事实，而 shell=pwsh 只携带客户端事实', async () => {
+  // Given本包两种PowerShell入口；When执行并渲染；Then仅直接pwsh产生独立接管事实。
+  const { ctx, registered } = buildExecutor()
+  for (const name of ['pwsh', 'shell']) {
+    const tool = registered.tools.find(tool => tool.name === name)
+    const args = { command: 'Get-Date', description: 'probe', ...(name === 'shell' ? { shell: 'pwsh' } : {}) }
+    const value = await tool.execute(args, EXEC)
+    const content = tool.output.render(args, value)
+    if (name === 'pwsh') assert.deepEqual(content.at(-1), { type: 'shell-select-takeover', tool: 'pwsh' })
+    else assert.equal(content.some(part => part.type === 'shell-select-takeover'), false)
+  }
 })
 
 test('矩阵:后台 deny 命中,启动前拒绝且零 spawn', async () => {

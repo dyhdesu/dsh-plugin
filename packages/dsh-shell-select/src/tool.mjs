@@ -12,6 +12,7 @@ import { TOOL_ABORTED, defineTool } from '@deepseek-ai/dsh-tools'
 import { ESCALATION_TARGETS, approveEscalation, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import { isAbsolute, resolve } from 'node:path'
 import { renderResult, renderProcessRead } from './render.mjs'
+import { PWSH_TAKEOVER_BLOCK } from './pwsh-takeover.mjs'
 import { parseExitStatus } from '@deepseek-ai/dsh-shell'
 
 /** 拒升权/Abort 错误构造:dsh-llm HarnessError 缺失时以同码 Error 降级(错误码通道不变)。 */
@@ -259,7 +260,7 @@ export function registerShellTool(ctx, { executor }) {
         text: value.kind === 'background'
           ? `started background job ${value.jobId}${value.shell !== undefined ? `\n[shell: ${value.shell}]` : ''}`
           : renderResult(value, escalationModes, value.shell),
-      }],
+      }, ...(toolName === 'pwsh' ? [PWSH_TAKEOVER_BLOCK] : [])],
     },
     async execute(args, exec) {
       validateArgs(args)
@@ -337,7 +338,7 @@ export function registerShellTool(ctx, { executor }) {
       }
     },
     presentResult: (args, result) => {
-      const block = result.content.length === 1 ? result.content[0] : undefined
+      const block = result.content.filter(part => part.type === 'text').length === 1 ? result.content.find(part => part.type === 'text') : undefined
       if (block === undefined || block.type !== 'text') return undefined
       const raw = block.text
       if (typeof args === 'object' && args !== null && args.run_in_background === true || result.isError) {

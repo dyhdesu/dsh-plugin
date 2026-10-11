@@ -110,6 +110,7 @@ window.__ModuleLoader__.load({
       '.sls-tv__head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid rgba(128,128,128,.18); background:rgba(128,128,128,.05); }',
       // 头部单行片段禁折行:cwd 行宽不足时收缩出省略号,徽章不收缩不折行
       '.sls-tv__cwd { font-family:var(--sls-mono, monospace); font-size:12px; opacity:.7; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }',
+      '.sls-tv__takeover { font-size:11px; padding:0 7px; border-radius:999px; border:1px solid currentColor; opacity:.75; flex:none; white-space:nowrap; }',
       '.sls-tv__badge { font-size:11px; padding:0 7px; border-radius:999px; border:1px solid rgba(128,128,128,.35); opacity:.85; flex:none; white-space:nowrap; }',
       '.sls-tv__pill { font-size:12px; color:#d4553f; flex:none; white-space:nowrap; }',
       '.sls-tv__pill--bg { color:var(--dsw-alias-label-tertiary, inherit); }',
@@ -253,22 +254,23 @@ window.__ModuleLoader__.load({
       }
 
       const contentText = (block.content ?? []).map((part) => (part.type === 'text' ? part.text : '')).filter((text) => text !== '').join('\n')
+      const intercepted = toolKey === 'pwsh' && (block.content ?? []).some((part) => part.type === 'shell-select-takeover' && part.tool === 'pwsh')
       const shellName = shellNameOf(parseShellMark(contentText))
       const outputText = stripShellMark(contentText)
       // 后台 ack:独立卡呈现命令全文与任务号徽标,ack 原文作输出(不再落 generic 简版行)
       if (args.run_in_background === true) {
         const jobId = /started background job (\S+)/.exec(contentText)?.[1]
-        return { kind: 'background', status: 'background', command, description, cwdDir, cwdFull, shellName, output: outputText, jobId }
+        return { kind: 'background', status: 'background', command, description, cwdDir, cwdFull, shellName, intercepted, output: outputText, jobId }
       }
       // 空结果落 generic:官方 singleResultText 无文本即回通用卡,避免空输出伪 done 终端卡;
       // isError/error 块带 alert(错误红点语义),其余(空输出/无描述/截断)中性无状态点
       if (outputText === '' || block.isError === true || block.error !== undefined || description === undefined || hasSpillNotice(contentText)) {
         const alert = block.isError === true || block.error !== undefined ? 'error' : undefined
-        return { kind: 'generic', command, summary: description, output: outputText, running: false, alert }
+        return { kind: 'generic', command, summary: description, output: outputText, running: false, alert, intercepted }
       }
       const tail = parseExitTail(outputText)
       const status = tail.signal !== undefined ? 'signaled' : tail.exitCode !== 0 ? 'failed' : 'done'
-      return { kind: 'terminal', status, command, description, cwdDir, cwdFull, shellName, output: tail.output, exitCode: tail.exitCode, signal: tail.signal, code: undefined }
+      return { kind: 'terminal', status, command, description, cwdDir, cwdFull, shellName, intercepted, output: tail.output, exitCode: tail.exitCode, signal: tail.signal, code: undefined }
     }
     // LOGIC-END shellCardModel
 
@@ -385,11 +387,16 @@ window.__ModuleLoader__.load({
           h('span', { className: 'sls-tv__title' }, 'Shell'),
           summary !== '' ? h('span', { className: 'sls-tv__sep', 'aria-hidden': true }) : null,
           summary !== '' ? h('span', { className: 'sls-tv__sum' + (status === 'generic-error' ? ' sls-tv__sum--err' : '') }, summary) : null,
+          model.intercepted ? h(TakeoverBadge, { en }) : null,
           status === 'running' ? h('span', { className: 'sls-tv__pulse' }, en ? 'running…' : '运行中…') : null,
         ),
         open && expandable ? h('pre', { className: 'sls-tv__out', style: { border: '1px solid rgba(128,128,128,.28)', borderRadius: 8 } }, model.command + (model.output !== null && model.output !== '' ? `\n${model.output}` : '')) : null,
         inspect !== undefined ? h('button', { className: 'sls-tv__inspect', onClick: inspect }, TOOLVIEW_ICONS.IconInspect({}), en ? 'Inspect' : '检查') : null,
       )
+    }
+
+    function TakeoverBadge({ en }) {
+      return h('span', { className: 'sls-tv__takeover', title: en ? 'Direct pwsh call handled by shell-select' : '直接 pwsh 调用由 shell-select 接管' }, en ? 'Intercepted' : '插件接管')
     }
 
     function CommandBody({ command }) {
@@ -419,6 +426,7 @@ window.__ModuleLoader__.load({
           ),
           model.cwdDir !== undefined ? h('span', { className: 'sls-tv__cwd', title: 'pwd: ' + (model.cwdFull ?? model.cwdDir) }, model.cwdDir) : null,
           model.shellName !== undefined ? h('span', { className: 'sls-tv__badge', title: en ? 'Shell client' : 'Shell 客户端' }, model.shellName) : null,
+          model.intercepted ? h(TakeoverBadge, { en }) : null,
           h('span', { className: 'sls-tv__sp' }),
           pill !== undefined ? h('span', { className: 'sls-tv__pill' + (meta.pillTone === 'bg' ? ' sls-tv__pill--bg' : '') }, pill) : null,
           h('span', { className: 'sls-tv__copy' },
@@ -481,6 +489,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'sls-tv__title' }, 'Shell'),
           h('span', { className: 'sls-tv__sep', 'aria-hidden': true }),
           h('span', { className: 'sls-tv__sum' + (failed ? ' sls-tv__sum--err' : '') }, summary),
+          model.intercepted ? h(TakeoverBadge, { en }) : null,
           model.status === 'running' ? h(RunningDuration, { startedAt: model.startedAt, en }) : null,
           model.status === 'background' && model.jobId !== undefined
             ? h('span', { className: 'sls-tv__badge', title: en ? 'Background job' : '后台任务' }, en ? `bg ${model.jobId}` : `后台 ${model.jobId}`)

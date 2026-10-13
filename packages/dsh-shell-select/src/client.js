@@ -1,8 +1,7 @@
 // dsh-shell-select Client 半区:tool.call.toolview shell 族卡片(官方 BashRow/
 // terminalCardModel 同构 + 复制/折行/客户端徽章增强)。
 // 以 DSH client-modules 自注册格式发布:__ModuleLoader__.load({id, factory});
-// 客户端名册经 webServer 路由 /api/shell-select/config 读取(配置写入走宿主
-// settings JSON,浏览器侧无设置页)。
+// 客户端名册与 Shell 管理设置页经 /api/shell-select/* 读写宿主配置。
 
 window.__ModuleLoader__.load({
   id: '@mzzsfy/dsh-shell-select',
@@ -50,6 +49,8 @@ window.__ModuleLoader__.load({
 
     const API = {
       config: '/api/shell-select/config',
+      probe: '/api/shell-select/probe',
+      detect: '/api/shell-select/detect',
     }
 
     async function api(path, options) {
@@ -202,6 +203,24 @@ window.__ModuleLoader__.load({
     }
 
     const CSS = [
+      '.sls-settings{display:flex;flex-direction:column;gap:14px;max-width:780px;color:var(--dsw-alias-label-primary,inherit)}',
+      '.sls-settings p{margin:0}.sls-settings small{color:var(--dsw-alias-label-secondary,inherit)}',
+      '.sls-settings__entry{min-width:0;margin:0;padding:14px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));border-radius:8px;display:flex;flex-direction:column;gap:10px}',
+      '.sls-settings__field{display:flex;flex-direction:column;gap:6px;font-size:13px}',
+      '.sls-settings__field input,.sls-settings__field select,.sls-settings__field textarea{box-sizing:border-box;width:100%;min-width:0;min-height:36px;padding:7px 9px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));border-radius:6px;background:var(--dsw-alias-bg-primary,transparent);color:inherit;font:inherit}',
+      '.sls-settings__field textarea{font-family:var(--sls-mono,monospace);resize:vertical}',
+      '.sls-settings__actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
+      '.sls-settings__button{min-height:36px;padding:6px 12px;border:1px solid var(--dsw-alias-border-l2,rgba(128,128,128,.3));border-radius:6px;background:transparent;color:inherit;cursor:pointer}',
+      '.sls-settings__button:not(:disabled):hover{background:var(--dsw-alias-bg-secondary,rgba(128,128,128,.1))}',
+      '.sls-settings__button:disabled{opacity:.5;cursor:default}.sls-settings__notice{white-space:pre-wrap;overflow-wrap:anywhere}',
+      '.sls-settings__switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;position:relative}',
+      '.sls-settings__switch input[type="checkbox"]{position:absolute;opacity:0;width:1px;height:1px}',
+      '.sls-settings__track{position:relative;flex:none;width:34px;height:20px;border-radius:999px;background:var(--dsw-alias-border-l2,rgba(128,128,128,.35));transition:background .15s}',
+      '.sls-settings__thumb{position:absolute;width:14px;height:14px;top:3px;left:3px;border-radius:50%;background:var(--dsw-alias-bg-primary,#fff);transition:transform .15s}',
+      '.sls-settings__switch input[type="checkbox"]:checked + .sls-settings__track{background:var(--dsw-alias-state-info-primary,#4b7bcc)}',
+      '.sls-settings__switch input[type="checkbox"]:checked + .sls-settings__track .sls-settings__thumb{transform:translateX(14px)}',
+      '.sls-settings__switch input[type="checkbox"]:focus-visible + .sls-settings__track{outline:2px solid currentColor;outline-offset:2px}',
+      '.sls-settings__switch input[type="checkbox"]:disabled + .sls-settings__track{opacity:.5}',
       // tool.call.toolview 卡片(key 'shell'):官方 terminal 行同构 + 复制/折行增强。
       // 色彩对齐官方 ToolRow:标题 label-secondary、icon 盒 label-tertiary(实证自
       // 官方行 computed style);token 缺失时回退 inherit 不致不可读
@@ -614,9 +633,153 @@ window.__ModuleLoader__.load({
       )
     }
 
+    const SHELL_KINDS = { pwsh: 'PowerShell', bash: 'Bash', cmd: 'CMD', wsl: 'WSL' }
+
+    function ShellSelectApp() {
+      const [form, setForm] = useState(null)
+      const [busy, setBusy] = useState(false)
+      const [notice, setNotice] = useState('')
+      const [revision, setRevision] = useState(0)
+
+      const editable = (section) => {
+        const { resolved, ...config } = section
+        return {
+          config,
+          entries: config.shells.map((entry, index) => ({
+            ...entry, key: `loaded-${index}`, argsText: JSON.stringify(entry.args ?? []),
+            envText: JSON.stringify(entry.env ?? {}, null, 2),
+            available: resolved?.shells.find((item) => item.id === entry.id)?.available,
+          })),
+          nextKey: config.shells.length,
+          defaultId: config.default,
+          denyText: JSON.stringify(config.deny ?? [], null, 2),
+        }
+      }
+
+      useEffect(() => {
+        let disposed = false
+        setNotice('')
+        api(API.config).then((section) => {
+          if (!disposed) setForm(editable(section))
+        }).catch((error) => { if (!disposed) setNotice('加载失败：' + error.message) })
+        return () => { disposed = true }
+      }, [revision])
+
+      const patchEntry = (key, changes) => setForm((current) => ({
+        ...current,
+        defaultId: changes.id !== undefined && current.entries.find((entry) => entry.key === key)?.id === current.defaultId
+          ? changes.id : current.defaultId,
+        entries: current.entries.map((entry) => entry.key === key ? { ...entry, ...changes, available: undefined } : entry),
+      }))
+      const removeEntry = (key) => setForm((current) => {
+        const entries = current.entries.filter((entry) => entry.key !== key)
+        return { ...current, entries, defaultId: entries.some((entry) => entry.id === current.defaultId) ? current.defaultId : entries[0]?.id ?? '' }
+      })
+      const addEntry = () => setForm((current) => ({
+        ...current, nextKey: current.nextKey + 1,
+        entries: [...current.entries, { key: `added-${current.nextKey}`, id: '', kind: 'bash', path: '', argsText: '[]', envText: '{}', login: false, distro: '' }],
+      }))
+      const save = async () => {
+        setBusy(true)
+        setNotice('')
+        try {
+          const shells = form.entries.map((entry) => {
+            const args = JSON.parse(entry.argsText)
+            const env = JSON.parse(entry.envText)
+            if (!Array.isArray(args) || args.some((value) => typeof value !== 'string')) throw new Error('参数 JSON 必须是字符串数组')
+            if (env === null || Array.isArray(env) || typeof env !== 'object' || Object.values(env).some((value) => typeof value !== 'string')) throw new Error('环境 JSON 必须是字符串键值对象')
+            return { id: entry.id.trim(), kind: entry.kind, path: entry.path.trim(), args, login: entry.login === true, distro: entry.distro ?? '', env }
+          })
+          const ids = shells.map((entry) => entry.id)
+          if (ids.length === 0 || ids.some((id) => id === '')) throw new Error('至少保留一个客户端，id 不能为空')
+          if (new Set(ids).size !== ids.length) throw new Error('客户端 id 重复')
+          const defaultId = form.defaultId.trim()
+          if (!ids.includes(defaultId)) throw new Error('默认客户端不在列表中')
+          const deny = JSON.parse(form.denyText)
+          if (!Array.isArray(deny) || deny.some((rule) => typeof rule !== 'string')) throw new Error('命令黑名单 JSON 必须是字符串数组')
+          if (deny.some((rule) => rule === '')) throw new Error('黑名单不能包含空字符串；不拦截请使用 []')
+          for (const [index, rule] of deny.entries()) {
+            try { new RegExp(rule, 'i') } catch (error) { throw new Error(`第 ${index + 1} 条正则非法：${error.message}`) }
+          }
+          const result = await api(API.config, { method: 'POST', body: JSON.stringify({ ...form.config, shells, default: defaultId, deny }) })
+          clientCatalog = { default: result.resolved.default, byId: Object.fromEntries(result.resolved.shells.map((entry) => [entry.id, entry.id])) }
+          setNotice('已保存，默认客户端与工具描述即时生效')
+          try {
+            const section = await api(API.config)
+            setForm(editable(section))
+          } catch (error) { setNotice('已保存，但刷新失败：' + error.message + '；请重新加载') }
+        } catch (error) {
+          setNotice('保存失败：' + error.message)
+        } finally { setBusy(false) }
+      }
+      const inspect = async (path, body, label) => {
+        setBusy(true)
+        setNotice('')
+        try {
+          const result = await api(path, { method: 'POST', body: JSON.stringify(body) })
+          setNotice(path === API.probe ? (result.exists ? '路径存在' : '路径不存在')
+            : `${label}：${result.found.map((item) => item.path).join('；') || '未发现候选'}`)
+        } catch (error) { setNotice('探测失败：' + error.message) }
+        finally { setBusy(false) }
+      }
+      const reload = h('button', { type: 'button', className: 'sls-settings__button', disabled: busy, onClick: () => { setForm(null); setRevision((value) => value + 1) } }, '重新加载')
+      if (form === null) return h('div', { className: 'sls-settings', 'aria-busy': !notice },
+        h('div', { role: notice ? 'alert' : 'status' }, notice || '加载中…'), notice ? reload : null)
+
+      return h('div', { className: 'sls-settings' },
+        h('p', null, '管理模型可选的命令行客户端。路径留空自动探测，省略 shell 参数时使用默认客户端。'),
+        h('label', { className: 'sls-settings__field' }, '默认客户端',
+          h('select', { 'aria-label': '默认客户端', value: form.defaultId, disabled: busy, onChange: (event) => setForm((current) => ({ ...current, defaultId: event.target.value })) },
+            form.entries.map((entry) => h('option', { key: entry.key, value: entry.id }, entry.id || '(未命名)')))),
+        form.entries.map((entry, index) => {
+          const field = (label, name, value, type = 'input') => h('label', { className: 'sls-settings__field' }, label,
+            h(type, { 'aria-label': `客户端 ${index + 1} ${label}`, value, disabled: busy, rows: type === 'textarea' ? 3 : undefined,
+              onChange: (event) => patchEntry(entry.key, { [name]: event.target.value }) }))
+          return h('fieldset', { className: 'sls-settings__entry', key: entry.key, disabled: busy },
+            h('legend', null, entry.id || '新客户端'),
+            h('div', { className: 'sls-settings__actions' },
+              h('span', null, entry.available === true ? '可用' : entry.available === false ? '不可用' : '保存后检查可用性'),
+              h('button', { type: 'button', className: 'sls-settings__button', disabled: busy, 'aria-label': `移除客户端 ${index + 1}`, onClick: () => removeEntry(entry.key) }, '移除')),
+            field('id', 'id', entry.id),
+            h('label', { className: 'sls-settings__field' }, '工作环境', h('select', {
+              'aria-label': `客户端 ${index + 1} 工作环境`, value: entry.kind, disabled: busy, onChange: (event) => patchEntry(entry.key, { kind: event.target.value }),
+            }, Object.entries(SHELL_KINDS).map(([kind, label]) => h('option', { key: kind, value: kind }, label)))),
+            field('路径', 'path', entry.path),
+            h('div', { className: 'sls-settings__actions' },
+              h('button', { type: 'button', className: 'sls-settings__button', disabled: busy || !entry.path.trim(), onClick: () => inspect(API.probe, { path: entry.path }, '') }, '探测路径'),
+              h('button', { type: 'button', className: 'sls-settings__button', disabled: busy, onClick: () => inspect(API.detect, { kinds: [entry.kind] }, SHELL_KINDS[entry.kind]) }, '扫描本机')),
+            field('参数 JSON', 'argsText', entry.argsText, 'textarea'),
+            h('small', null, '字符串数组；[] 使用默认参数，{command} 代表命令。'),
+            field('环境 JSON', 'envText', entry.envText, 'textarea'),
+            entry.kind === 'wsl' ? field('发行版', 'distro', entry.distro ?? '') : null,
+            entry.kind === 'bash' ? h('label', { className: 'sls-settings__switch' },
+              h('input', { type: 'checkbox', 'aria-label': `客户端 ${index + 1} 登录壳`, checked: entry.login === true, disabled: busy, onChange: (event) => patchEntry(entry.key, { login: event.target.checked }) }),
+              h('span', { className: 'sls-settings__track' }, h('span', { className: 'sls-settings__thumb' })), '登录壳（-lc）') : null,
+          )
+        }),
+        h('button', { type: 'button', className: 'sls-settings__button', disabled: busy, onClick: addEntry }, '添加客户端'),
+        h('label', { className: 'sls-settings__field' }, '命令黑名单', h('textarea', {
+          'aria-label': '命令黑名单', rows: 4, value: form.denyText, disabled: busy,
+          onChange: (event) => setForm((current) => ({ ...current, denyText: event.target.value })),
+        })),
+        h('small', null, 'JSON 字符串数组，每项一条正则，大小写不敏感；命中即拒绝，[] 表示不拦截。'),
+        h('div', { className: 'sls-settings__actions' }, reload,
+          h('button', { type: 'button', className: 'sls-settings__button', disabled: busy, onClick: save }, busy ? '处理中…' : '保存')),
+        notice ? h('div', { role: notice.includes('失败') ? 'alert' : 'status', className: 'sls-settings__notice' }, notice) : null,
+      )
+    }
+
     return {
       inject: ['slots'],
       apply(ctx) {
+        const NAV_ICON = { 'Shell 管理': 'terminal' }
+        if (window.__navicIcons !== undefined) window.__navicIcons.register(NAV_ICON)
+        else if (Array.isArray(window.__navicIconQueue)) window.__navicIconQueue.push(NAV_ICON)
+        else window.__navicIconQueue = [NAV_ICON]
+        ctx.slots.inject('settings.section', () => ctx.slots.register(
+          { name: 'settings.section', id: 'shell-select', order: 82, label: 'Shell 管理' },
+          () => React.createElement(ShellSelectApp),
+        ))
         installPathRescue(ctx)
         ctx.effect(() => {
           const style = document.createElement('style')

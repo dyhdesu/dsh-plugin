@@ -7,7 +7,7 @@ Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执�
 ## 工作方式
 
 - **运行时接管**:bundle 补丁不静态禁用官方 `tool-pwsh`、`pwsh-sandbox` 两行——boot 期官方 pwsh 链先服务,主行(`ctx.shell` 执行器 + `shell` 工具 + systemPrompt 段)apply 落定后经 `entry.update` 运行时禁用官方两行(dsh-market 同款,内存态不持久),再挂载执行器接管。本包任意死法(import 崩/apply 崩/被禁/卸载)下官方行保持启用,官方 pwsh 链自服务,系统不出现 shell 全灭窗口;重启后由行树声明态收敛。web 行(`/api/shell-select/*` 数据通道,`inject: ['webServer', 'settings']` 声明式门控——服务就绪才激活)与 guard 哨兵行同 patch 插入。
-- 配置事实源 = 主行 Config(dsh 0.1.7 settings 面以 profile 条目为存储,ns `shell-select`);配置仅经宿主 settings JSON(settings.yaml / settings 面)读写,浏览器侧不注入宿主设置页 UI,写路径 `settings.replace`,配置变更由 cordis 行重载活生效(工具描述随行重建即时更新)。
+- 配置事实源 = 主行 Config(dsh 0.1.7 settings 面以 profile 条目为存储,ns `shell-select`);设置中的 **Shell 管理** 页面经现有 API 读写宿主 settings,写路径 `settings.replace` 后刷新执行面(工具描述与默认客户端即时更新),也可通过宿主配置编辑器维护。
 - client 半区 `dsh.client.inject` 声明(官方机制,dsh-client-file-upload 等官方包同款):保证 client 运行时模块表中 `primitives`/`slots` 面在场;primitives 另有 try/catch 降级自绘兜底。
 - 本包执行器完整实现官方 `ctx.shell` seam(`resolve`/`run`/`start`/`runFor`/`startFor`/`entryFor`/`sandboxMode`),结构官方 PwshLocalExecutor 同构(实例状态/方法全公有——cordis 服务代理会把经 `ctx.shell` 调用的方法 `this` 重定向到阴影对象,`#` 私有触发品牌检查错误)。
 - **不管理会话预设**:bundle 补丁仅插入主行、guard、web，不声明 `shell-select` 预设，不覆写 `agent-preset-registry` 默认值。宿主及用户选择的预设保持原样，已存活代理及其子代理可继续持有旧预设修订；部署若显式指定已删除的 `shell-select` 预设，应通过宿主预设选择入口改选现存预设，本包不保留别名或迁移路径。
@@ -59,7 +59,7 @@ shell-select:
   default: pwsh
 ```
 
-出厂默认即上述三客户端。配置仅经 settings JSON 编辑(本包不向宿主设置页注入任何 UI);浏览器侧仅保留 `GET /api/shell-select/config` 名册读取,供会话卡徽章解析客户端命名。第三方实现:任意可执行文件 + 自定义 args 模板。
+出厂默认即上述三客户端。设置中的 **Shell 管理** 可新增/删除客户端、修改默认客户端、探测路径及扫描本机、配置登录壳与 WSL 发行版、编辑命令黑名单。参数与黑名单使用 JSON 字符串数组，环境使用 JSON 字符串键值对象；黑名单保留空白与换行，拒绝空字符串，不拦截请使用 `[]`。保存不会拆分含空格参数、改写正则空白或把自动探测路径写回声明值；保存后回读完整配置，执行预算保持不变，回读失败明确提示已保存但刷新失败。第三方实现:任意可执行文件 + 自定义 args 模板。
 
 env 优先级(同键高右):内置覆盖集(NO_COLOR/PAGER/GIT_PAGER)< 条目 `env` < 调用方环境(spec.env + 会话 `DSH_*` 事实)。wsl 形把条目 env 与调用方环境全部键(WSLENV 本身除外)追加进 WSLENV 白名单,过 WSL 边界不静默失效。
 

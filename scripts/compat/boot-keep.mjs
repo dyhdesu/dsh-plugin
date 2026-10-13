@@ -186,7 +186,7 @@ function acquireKeeperLock() {
 acquireKeeperLock()
 
 // 幂等 profile:bundles 形态与工作副本桥都齐时跳过重建(pnpm install 分钟级,逐包轮同闭包形态复用)
-const { bundles: repoBundles } = enumeratePackages()
+const { bundles: repoBundles } = enumeratePackages({ hostVersion: version })
 const wantedShort = (args.only ?? []).map((n) => n.replace(/^@mzzsfy\//, ''))
 const wantedBundles = wantedShort.length > 0
   ? repoBundles.filter((name) => wantedShort.includes(name.replace(/^@mzzsfy\//, ''))).map((name) => `@mzzsfy/${name}`)

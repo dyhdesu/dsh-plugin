@@ -41,6 +41,7 @@ import {spawnSync} from 'node:child_process'
 import {existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, join, resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
+import {judgeHostMin} from './compare-version.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const profileRoot = join(process.env.USERPROFILE, '.dsh', 'profiles', 'web')
@@ -109,44 +110,6 @@ function hostVersion() {
 }
 
 /**
- * prerelease 感知版本比较(-alpha/-rc 段低于同位正式版):a<b → -1,a>b → 1,等 → 0。
- * 核心段允许 3-4 位(x.y.z 或 x.y.z.w,宿主出现过 4 位形态),prerelease 段按
- * '.' 切分逐段比较(数字段数值比,标识段字典比,数字段 > 标识段,同 publish 规则)。
- * 形态不符合返回 null,调用方按无法校验处理(不放行也不阻塞)。
- */
-function compareVersion(a, b) {
-  const parse = (v) => {
-    const m = /^(\d+(?:\.\d+){2,3})(?:-([0-9A-Za-z.-]+))?$/.exec(v)
-    return m ? {core: m[1].split('.').map(Number), pre: m[2] ?? null} : null
-  }
-  const preKey = (t) => (/^\d+$/.test(t) ? [0, Number(t)] : [1, t])
-  const preCmp = (x, y) => {
-    const kx = preKey(x)
-    const ky = preKey(y)
-    return kx[0] !== ky[0] ? kx[0] - ky[0] : kx[1] < ky[1] ? -1 : kx[1] > ky[1] ? 1 : 0
-  }
-  const pa = parse(a)
-  const pb = parse(b)
-  if (!pa || !pb) return null
-  const width = Math.max(pa.core.length, pb.core.length)
-  for (let i = 0; i < width; i += 1) {
-    if ((pa.core[i] || 0) !== (pb.core[i] || 0)) return Math.sign((pa.core[i] || 0) - (pb.core[i] || 0))
-  }
-  if (pa.pre === pb.pre) return 0
-  if (pa.pre === null) return 1
-  if (pb.pre === null) return -1
-  const xs = pa.pre.split('.')
-  const ys = pb.pre.split('.')
-  for (let i = 0; i < Math.max(xs.length, ys.length); i += 1) {
-    if (xs[i] === undefined) return -1
-    if (ys[i] === undefined) return 1
-    const order = preCmp(xs[i], ys[i])
-    if (order !== 0) return order
-  }
-  return 0
-}
-
-/**
  * 宿主版本底线:包 manifest 的 dsh.hostMin(语义 = 低于该宿主版本的 API 面未验证,
  * 强链即复现 0.1.7-rc.2 时代的接管断裂)。宿主版本或 hostMin 任一缺失 → 校验跳过;
  * 可比且宿主 < hostMin → 拒绝该包进流程(返回 false,调用方摘出,不写依赖行不挂载)。
@@ -160,12 +123,12 @@ function meetsHostMin(dir) {
     console.log(`SKIP ${dir}: 宿主版本不可读,hostMin(${hostMin})校验跳过`)
     return true
   }
-  const order = compareVersion(host, hostMin)
-  if (order === null) {
+  const verdict = judgeHostMin(host, hostMin)
+  if (verdict === 'skip') {
     console.log(`SKIP ${dir}: 版本形态无法比较(宿主 ${host} / hostMin ${hostMin}),校验跳过`)
     return true
   }
-  if (order < 0) {
+  if (verdict === 'fail') {
     console.error(`FAIL ${dir}: 实时宿主 ${host} 低于 dsh.hostMin ${hostMin},拒绝 dev-link(升级宿主或下调 hostMin)`)
     return false
   }

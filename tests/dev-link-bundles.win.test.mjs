@@ -42,6 +42,7 @@ function sandbox(t, {packages, profileDeps = {}, bundles}) {
   mkdirSync(join(home, '.dsh', 'profiles', 'web'), {recursive: true})
   mkdirSync(join(sandRepo, 'scripts'))
   writeFileSync(join(sandRepo, 'scripts', 'dev-link.mjs'), readFileSync(join(repo, 'scripts', 'dev-link.mjs')))
+  writeFileSync(join(sandRepo, 'scripts', 'compare-version.mjs'), readFileSync(join(repo, 'scripts', 'compare-version.mjs')))
   for (const [dir, manifest] of Object.entries(packages)) {
     const pkgDir = join(sandRepo, 'packages', dir)
     mkdirSync(pkgDir, {recursive: true})

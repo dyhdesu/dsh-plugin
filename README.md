@@ -93,6 +93,7 @@ node scripts/publish.mjs <包名> --bump patch          # 本地版本已发布�
 - 本地版本低于线上时拒绝发布(防版本回退);高于线上时直接发布(`--bump` 仅适用于本地等于线上的场景)
 - 各包 package.json 的 `npmPublish` 脚本是无校验的单包发布命令,仅在明确清楚后果时使用
 - 发布要求本机已 `npm login`(2FA 账号需配置 otp 或使用 automation token)
+- 单包发布只运行目标包的有效 `npm test`;缺少或为空的 `test` script 时拒绝发布。`all` 运行全仓聚合门后，只对有有效 `test` script 的包逐个运行测试;`--skip-test` 会跳过聚合门与目标包测试并警告未经测试发布,仅作显式豁免。
 
 ## License
 

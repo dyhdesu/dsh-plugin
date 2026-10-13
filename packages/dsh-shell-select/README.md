@@ -22,6 +22,7 @@ Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执�
 `shell` 工具(官方 `pwsh` 工具逐调用镜像):
 
 - 参数:`command`、`description`、`shell`(客户端 id,缺省用默认)、`timeoutMs`、`workdir`、`run_in_background`,沙箱升权面与官方一致。
+- 模型主描述先说明当前默认 `shell`,再按配置逐项列出客户端 id 与工作环境(WSL 附已配置发行版,不可用项标记 `unavailable`);存在可用 Bash 时统一追加 Windows 路径提示。主描述只讲常规调用,不包含拒绝重试流程;系统提示保留退出失败与 Windows 中断处理纪律,不重复客户端选择和独立进程说明。拒绝返回及权限执行契约不变。
 - 输出标记与官方逐字同构:`[exit code: N]`、`[killed by signal: X]`、`[timed out after …]`、`[sandbox: …]`、截断 spill 提示;terminal 卡退出 pill 照常复原。
 
 ## 会话卡(tool.call.toolview)

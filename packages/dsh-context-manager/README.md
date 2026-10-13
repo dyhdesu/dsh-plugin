@@ -18,7 +18,11 @@
 
 ### 插话撤回
 
-消息气泡操作排的撤回图标:未应用的插话撤回到输入框重新编辑。RPC 走会话绑定面 `binding.session.updateQueue`,不与官方会话服务耦合。
+未应用插话的撤回行(输入框上方,undo 图标 + 预览文本):点击撤回到输入框重新编辑。RPC 走会话绑定面 `binding.session.updateQueue`,不与官方会话服务耦合。
+
+- 入口由 inbox 投影数据面驱动:组件订阅会话绑定面 `projections.faceOf('inbox')`(getSnapshot + subscribe),`next-step` 队列的 user 来源行实时映射为撤回行,行被应用/摘除即消失
+- 不依赖官方气泡 DOM:0.2.0-rc.2 实测气泡落账(user/message 事件到达前端)常迟于投影 spliced 且几乎同步于应用 claim,按气泡注入按钮的可撤窗口结构性趋零(第二次失效的形态结论);气泡仅作消息流展示,撤回入口独立于它
+- 发送后落账前的乐观态(行未入投影)宿主无撤回通道,不在覆盖范围;行集为空时 dock 零占位
 
 ### 对话分叉(fork,重写式)
 
@@ -66,7 +70,7 @@
 
 ## dsh 版本兼容
 
-- 0.2.0-rc.2:完全适配(装载 + 功能面逐格验证通过;fork 按钮注入在 0.2.0-rc.2 宿主下待归因,见 FIND-020-2)。插话撤回数据面适配:0.2.0 起 conversation `useSession` 的 `queue` 仅含 inbox `next-turn`,未应用插话改驻留 inbox `next-step` 队列,撤回行改经会话绑定面 `projections.faceOf('inbox')` 读取
+- 0.2.0-rc.2:完全适配(装载 + 功能面逐格验证通过;fork 按钮注入在 0.2.0-rc.2 宿主下待归因,见 FIND-020-2)。插话撤回数据面适配:0.2.0 起 conversation `useSession` 的 `queue` 仅含 inbox `next-turn`,未应用插话改驻留 inbox `next-step` 队列,撤回行改经会话绑定面 `projections.faceOf('inbox')` 读取;撤回入口形态结论(第二次失效后定稿):入口整体改由投影订阅驱动(自绘撤回行),不再依赖官方气泡 DOM——rc.2 渲染层不再持久渲染 `data-pending-steering`(仅落账前乐观态),气泡以 `data-chat-flow-kind="steering"` 驻留消息流且落账≈应用 claim,任何按气泡注入的方案窗口均结构性趋零
 - 0.1.7-rc.2:不崩溃底线通过(全家桶 crash-only)
 - 0.1.5-rc.3:未承诺(仅 shell-select 有宿主要求豁免;全家桶在该版本不启动,详见仓库 docs/兼容性测试/逐包测试进度.md)
 

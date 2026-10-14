@@ -3,9 +3,8 @@ import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
 import { createBoardApi } from './board.mjs'
 import { createSessionAdapter } from './session-adapter.mjs'
-import { registerToolRow } from './tools-row.mjs'
 import { presetDefinitions } from './presets.mjs'
-import { updateControlRecord, updateIndexRecord, updateSettingsRecord } from './store.mjs'
+import { updateControlRecord, updateIndexRecord, updateSettingsRecord, loadAdminBinding, updateAdminBindingRecord } from './store.mjs'
 import { createGlobalControl } from './core/global-control.mjs'
 import { applySessionEvent } from './core/orchestrator.mjs'
 import { createSettings } from './core/settings.mjs'
@@ -15,7 +14,7 @@ const TASK_TABLE_SCHEMA = z.any()
 // 域形态:单 kv 表承载任务聚合/索引/全局控制记录(update RMW 在域写链上原子);
 // global 句柄只有 get/set 无 RMW,控制记录不走 global。
 const DOMAIN_SPEC = defineDomain({
-  name: 'ai_team',
+  name: 'boss_simulator',
   version: 1,
   tables: { kv: domainTable(TASK_TABLE_SCHEMA) },
 })
@@ -48,6 +47,8 @@ export function registerControl(ctx) {
       updateAggregate: (id, fn) => table.update(`task/${id}`, fn),
       loadControl: () => Promise.resolve(table.get('control') ?? CONTROL_INITIAL),
       updateControl: (fn) => updateControlRecord(table, fn, CONTROL_INITIAL),
+      loadAdminBinding: () => loadAdminBinding(table),
+      updateAdminBinding: (fn) => updateAdminBindingRecord(table, fn),
     }
     const listAggregates = async () => {
       const index = table.get('taskIndex')
@@ -79,7 +80,7 @@ export function registerControl(ctx) {
             }
           }
         })().catch((error) => {
-          if (!stopped) console.warn('[ai-team] follow loop ended:', String(error?.message ?? error).slice(0, 160))
+          if (!stopped) console.warn('[boss-simulator] follow loop ended:', String(error?.message ?? error).slice(0, 160))
         }).finally(() => following.delete(sessionId))
       }
     })
@@ -91,24 +92,21 @@ export function registerControl(ctx) {
       drive: driveRef,
       now: () => Date.now(),
     })
-    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/board', handler: api.handleBoard }), 'ai-team board')
-    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/interrupt', handler: api.handleInterrupt }), 'ai-team interrupt')
-    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/settings', handler: api.handleSettings }), 'ai-team settings')
-    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/ai-team/drive', handler: api.handleDrive }), 'ai-team drive')
-    // 业务工具注册进全局工具面(经 inject(['tools']) 门控,同 rs-workflow 形态);guard 按预设精确 id 拒绝非受管会话(tools-row)
-    ctx.inject(['tools'], (toolsScope) => {
-      ctx.effect(registerToolRow(toolsScope, { store, now: () => Date.now() }))
-    })
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/boss-simulator/board', handler: api.handleBoard }), 'boss-simulator board')
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/boss-simulator/admin', handler: api.handleAdmin }), 'boss-simulator admin')
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/boss-simulator/interrupt', handler: api.handleInterrupt }), 'boss-simulator interrupt')
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/boss-simulator/settings', handler: api.handleSettings }), 'boss-simulator settings')
+    ctx.effect(() => scope.webServer.register({ kind: 'exact', path: '/api/boss-simulator/drive', handler: api.handleDrive }), 'boss-simulator drive')
     // 控制室运行时挂模块级单例:组合行(agent realm isolate)不可注入跨 realm 服务,经同模块闭包触达
     setControlRuntime({ store })
     try {
-      ctx.provide('aiTeamControl', { store })
+      ctx.provide('bossSimulatorControl', { store })
     } catch (error) {
-      console.warn('[ai-team] provide aiTeamControl failed:', String(error?.message ?? error))
+      console.warn('[boss-simulator] provide bossSimulatorControl failed:', String(error?.message ?? error))
     }
     // 角色预设:管理员/调度员/实施(persona 角色边界 + 业务工具行)
     ctx.inject(['agentPresets'], (presetScope) => {
-      console.warn('[ai-team] agentPresets inject fired')
+      console.warn('[boss-simulator] agentPresets inject fired')
       const registry = presetScope.agentPresets ?? presetScope
       const register = () => Promise.all(presetDefinitions().map(async (definition) => {
         const dispose = await registry.register(definition)
@@ -117,13 +115,13 @@ export function registerControl(ctx) {
       register().then(async () => {
         // 启动自检:预设清单与激活诊断落日志(broken 即组合装载失败,受管会话会静默回退缺省组合)
         const roster = await registry.list().catch(() => [])
-        console.warn('[ai-team] preset roster:', JSON.stringify(roster).slice(0, 400))
+        console.warn('[boss-simulator] preset roster:', JSON.stringify(roster).slice(0, 400))
         for (const definition of presetDefinitions()) {
           try {
             const resolved = await registry.resolve(definition.id)
-            if (resolved.broken !== undefined) console.warn(`[ai-team] preset ${definition.id} broken:`, JSON.stringify(resolved.broken).slice(0, 300))
+            if (resolved.broken !== undefined) console.warn(`[boss-simulator] preset ${definition.id} broken:`, JSON.stringify(resolved.broken).slice(0, 300))
           } catch (error) {
-            console.warn(`[ai-team] preset ${definition.id} resolve failed:`, String(error?.message ?? error).slice(0, 200))
+            console.warn(`[boss-simulator] preset ${definition.id} resolve failed:`, String(error?.message ?? error).slice(0, 200))
           }
         }
       })

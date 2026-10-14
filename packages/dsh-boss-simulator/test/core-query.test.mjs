@@ -27,7 +27,7 @@ function runOn(agg, runId, phase = 'implement', sessionId = 's1', workItemId = '
     attemptOrdinal: 1, definitionRevision: agg.definitionRevision,
     executionEpoch: agg.control.executionEpoch, globalStopGeneration: 0,
     executionSlot: `${agg.taskId}/${workItemId}/${phase}`, sessionId, requestId: `req-${runId}`,
-    presetId: 'ai-team-worker', state, executionTreeSettled: state === 'settled',
+    presetId: 'boss-simulator-worker', state, executionTreeSettled: state === 'settled',
     startedAt: now(), endedAt: now(), tokenTotal: null, usageCoverage: 'unknown', knownTokenTotal: 0,
   }
   return { ...agg, runs: { ...agg.runs, [runId]: record } }
@@ -105,11 +105,20 @@ test('查询投影: 计数为全量统计,cursor 分页,详情含派生 workItem
   assert.ok(q1.ok)
   assert.equal(q1.result.counts.ready, 2, '全量计数')
   assert.equal(q1.result.items.length, 1)
-  assert.equal(q1.result.nextCursor, 't1')
+  assert.equal(typeof q1.result.nextCursor, 'string')
+  assert.notEqual(q1.result.nextCursor, 't1')
+  const changed = queryBoard([{ ...a, title: '已更新' }, b], { globalStopGeneration: 0 }, { limit: 1, cursor: q1.result.nextCursor })
+  assert.equal(changed.code, 'REVISION_CONFLICT')
+  const wrongFilter = queryBoard([a, b], { globalStopGeneration: 0 }, { limit: 1, search: '任务一', cursor: q1.result.nextCursor })
+  assert.equal(wrongFilter.code, 'REVISION_CONFLICT')
   const q2 = queryBoard([a, b], { globalStopGeneration: 0 }, { limit: 10, cursor: q1.result.nextCursor })
   assert.equal(q2.result.items[0].taskId, 't2')
   const filtered = queryBoard([a, b], { globalStopGeneration: 0 }, { search: '任务一' })
   assert.equal(filtered.result.items.length, 2)
+  const tasks = Array.from({ length: 201 }, (_, index) => ({ ...a, taskId: `page-${index}`, createdAt: index }))
+  assert.equal(queryBoard(tasks, { globalStopGeneration: 0 }).result.items.length, 50)
+  assert.equal(queryBoard(tasks, { globalStopGeneration: 0 }, { limit: 200 }).result.items.length, 200)
+  assert.equal(queryBoard(tasks, { globalStopGeneration: 0 }, { limit: 201 }).code, 'INVALID_ARGUMENT')
   const detail = projectTaskDetail(a, { globalStopGeneration: 0 })
   assert.equal(detail.workItems[0].state, 'planned')
 })

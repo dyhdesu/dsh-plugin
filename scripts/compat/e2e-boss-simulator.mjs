@@ -1,4 +1,4 @@
-// ai-team E2E 编排(隔离环境):铸 cookie → drive 造任务/派发 → 模拟器排队工具报告 → prompt 驱动 → 断言推进。
+// boss-simulator E2E 编排(隔离环境):铸 cookie → drive 造任务/派发 → 模拟器排队工具报告 → prompt 驱动 → 断言推进。
 // 前置: 隔离宿主(9371, DSH_HOME=.compat home)+ 模拟器(18129) 已启动。
 import { readFileSync } from 'node:fs'
 
@@ -8,11 +8,11 @@ const mint = await fetch(`${base}/?token=${live.token}`, { redirect: 'manual' })
 const cookie = (mint.headers.getSetCookie?.() ?? []).map((c) => c.split(';')[0]).join('; ')
 const h = { cookie, origin: base, 'content-type': 'application/json' }
 const post = async (p, b) => {
-  const r = await fetch(`${base}/api/ai-team/${p}`, { method: 'POST', headers: h, body: JSON.stringify(b) })
+  const r = await fetch(`${base}/api/boss-simulator/${p}`, { method: 'POST', headers: h, body: JSON.stringify(b) })
   return { status: r.status, body: await r.text() }
 }
 const get = async (p) => {
-  const r = await fetch(`${base}/api/ai-team/${p}`, { headers: h })
+  const r = await fetch(`${base}/api/boss-simulator/${p}`, { headers: h })
   return JSON.parse(await r.text())
 }
 
@@ -24,7 +24,7 @@ console.log('session:', sessionId)
 const queue = await fetch('http://127.0.0.1:18129/control/replies', {
   method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ replies: [
-    { toolCalls: [{ name: 'ai_team', arguments: { tool: 'ai_team_report_result', args: { taskId: 't-e2e', runId: 'r1', reportId: 'rep-1', verdict: 'ready_for_review', coveredCriterionIds: ['c1'] } } }] },
+    { toolCalls: [{ name: 'boss_simulator', arguments: { tool: 'boss_simulator_report_result', args: { taskId: 't-e2e', runId: 'r1', reportId: 'rep-1', verdict: 'ready_for_review', coveredCriterionIds: ['c1'] } } }] },
     { text: '报告已提交。' },
   ] }),
 })

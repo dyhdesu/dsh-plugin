@@ -58,6 +58,15 @@ export async function updateIndexRecord(handle, fn, initial) {
   return updateKeyWithSeed(handle, 'taskIndex', fn, initial)
 }
 
+// 管理员绑定记录:面板管理员入口的幂等依据;missing/未设视为无绑定
+export async function loadAdminBinding(handle) {
+  return (await handle.get('adminBinding')) ?? null
+}
+
+export async function updateAdminBindingRecord(handle, fn) {
+  return updateKeyWithSeed(handle, 'adminBinding', fn, null)
+}
+
 async function updateKeyWithSeed(handle, key, fn, initial) {
   try {
     return await handle.update(key, (current) => fn(current ?? initial))

@@ -47,7 +47,7 @@ test('实施→独立验收→结案闭环:受理有回执,自验拒绝,结案�
   const { agg, adapter } = await seeded()
   const dispatch = await dispatchRun(null, agg, {
     runId: 'r1', workItemId: 'w1', phase: 'implement', actorRole: 'executor',
-    requestId: 'req-1', content: '实施', presetId: 'ai-team-worker', sessionAdapter: adapter, globalControl: GLOBAL_CONTROL,
+    requestId: 'req-1', content: '实施', presetId: 'boss-simulator-worker', sessionAdapter: adapter, globalControl: GLOBAL_CONTROL,
   })
   assert.ok(dispatch.ok, dispatch.message)
   assert.equal(dispatch.turnId, 'turn-1')
@@ -63,7 +63,7 @@ test('实施→独立验收→结案闭环:受理有回执,自验拒绝,结案�
   // 独立验收 session
   const review = await dispatchRun(null, state, {
     runId: 'r2', workItemId: 'w1', phase: 'accept', actorRole: 'reviewer',
-    requestId: 'req-2', content: '验收', presetId: 'ai-team-worker', sessionAdapter: executor, globalControl: GLOBAL_CONTROL,
+    requestId: 'req-2', content: '验收', presetId: 'boss-simulator-worker', sessionAdapter: executor, globalControl: GLOBAL_CONTROL,
   })
   assert.ok(review.ok, review.message)
   state = { ...state, runs: review.aggregate.runs }

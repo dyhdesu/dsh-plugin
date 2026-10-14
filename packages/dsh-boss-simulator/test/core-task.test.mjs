@@ -40,7 +40,7 @@ function dispatchRun(agg, { runId = 'r1', phase = 'implement', actorRole = 'exec
   assert.ok(perm.ok, perm.message)
   const rec = recordRun(agg, {
     runId, workItemId: 'w1', phase, actorRole, sessionId, requestId: `req-${runId}`,
-    presetId: 'ai-team-worker', slotKey: perm.result.slotKey, globalControl: control,
+    presetId: 'boss-simulator-worker', slotKey: perm.result.slotKey, globalControl: control,
   })
   assert.ok(rec.ok, rec.message)
   return rec.result.aggregate

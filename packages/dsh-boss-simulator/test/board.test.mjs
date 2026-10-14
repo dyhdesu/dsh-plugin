@@ -29,6 +29,7 @@ async function makeStore() {
     async listAggregates() { return [...records.values()].filter((r) => r.taskId) },
     async loadControl() { return control },
     async updateControl(fn) { control = fn(control); return control },
+    async loadAdminBinding() { return null },
   }
   return { store, records }
 }
@@ -39,7 +40,7 @@ function jsonRes() {
   return r
 }
 
-function streamReq({ method, headers, url = '/api/ai-team/board', body }) {
+function streamReq({ method, headers, url = '/api/boss-simulator/board', body }) {
   return {
     method, headers, url,
     on(event, cb) {
@@ -57,18 +58,18 @@ test('GET board 返回查询投影(envelope+counts+items)', async () => {
   assert.equal(r.status, 200)
   assert.equal(r.payload.counts.ready, 1)
   assert.equal(r.payload.items[0].taskId, 't1')
-  assert.equal(r.payload.envelope.serverEpoch, 1)
+  assert.equal(typeof r.payload.envelope.serverEpoch, 'string')
 })
 
 test('GET board?taskId= 返回详情投影;缺失返回 404', async () => {
   const { store } = await makeStore()
   const api = createBoardApi({ store })
   const r = jsonRes()
-  await api.handleBoard(streamReq({ headers: { host: 'h' }, url: '/api/ai-team/board?taskId=t1' }), r)
+  await api.handleBoard(streamReq({ headers: { host: 'h' }, url: '/api/boss-simulator/board?taskId=t1' }), r)
   assert.equal(r.status, 200)
   assert.equal(r.payload.workItems[0].workItemId, 'w1')
   const miss = jsonRes()
-  await api.handleBoard(streamReq({ headers: { host: 'h' }, url: '/api/ai-team/board?taskId=nope' }), miss)
+  await api.handleBoard(streamReq({ headers: { host: 'h' }, url: '/api/boss-simulator/board?taskId=nope' }), miss)
   assert.equal(miss.status, 404)
 })
 
@@ -119,7 +120,7 @@ test('跨源写请求被同源比对拒绝;缺 commandId 400;413/500 语义保�
   const big = jsonRes()
   await api.handleInterrupt(streamReq({ headers: { host: 'h', 'content-length': String(65 * 1024) }, body: 'x' }), big)
   assert.equal(big.status, 413)
-  const broken = createBoardApi({ store: { listAggregates: async () => { throw new Error('boom') }, loadControl: async () => { throw new Error('boom') } } })
+  const broken = createBoardApi({ store: { listAggregates: async () => { throw new Error('boom') }, loadControl: async () => { throw new Error('boom') }, loadAdminBinding: async () => { throw new Error('boom') } } })
   const r500 = jsonRes()
   await broken.handleBoard(streamReq({ headers: { host: 'h' } }), r500)
   assert.equal(r500.status, 500)

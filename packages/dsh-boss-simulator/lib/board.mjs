@@ -1,11 +1,13 @@
-// board API v2:/api/ai-team/board 只读查询(查询投影契约)+/api/ai-team/interrupt 写路由。
+// board API v2:/api/boss-simulator/board 只读查询(查询投影契约)+/api/boss-simulator/interrupt 写路由。
 // 安全边界(全仓库约定):不做 host 认证;写路由跨源防护以 Origin 同源比对为上限。
+import { randomUUID } from 'node:crypto'
 import { queryBoard, projectTaskDetail } from './core/query.mjs'
 import { stopAll, recordStopOperation } from './core/global-control.mjs'
 import { stopTask, confirmStopped, hasActiveRuns, submitReport } from './core/task.mjs'
 import { createSettings, saveSettings } from './core/settings.mjs'
 import { dispatchRun, interruptTask } from './core/orchestrator.mjs'
 import { createTask, defineWorkItem, authorizeTask } from './core/task.mjs'
+import { ADMIN_PRESET_ID } from './presets.mjs'
 
 function sendJson(res, status, payload) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
@@ -51,10 +53,10 @@ function readBody(req) {
   })
 }
 
-export function createBoardApi({ store, drive, now = Date.now }) {
-  async function handleBoard(req, res, url = new URL(req.url ?? '/api/ai-team/board', 'http://local')) {
+export function createBoardApi({ store, drive, now = Date.now, serverEpoch = randomUUID() }) {
+  async function handleBoard(req, res, url = new URL(req.url ?? '/api/boss-simulator/board', 'http://local')) {
     try {
-      const [aggregates, control] = await Promise.all([store.listAggregates(), store.loadControl()])
+      const [aggregates, control, adminBinding] = await Promise.all([store.listAggregates(), store.loadControl(), store.loadAdminBinding()])
       const taskId = url.searchParams.get('taskId')
       if (taskId) {
         const aggregate = aggregates.find((a) => a.taskId === taskId)
@@ -75,14 +77,60 @@ export function createBoardApi({ store, drive, now = Date.now }) {
         search: params.get('search') ?? undefined,
         cursor: params.get('cursor') ?? undefined,
         limit: params.has('limit') ? Number(params.get('limit')) : undefined,
+        now,
+        serverEpoch,
       })
       if (!queried.ok) {
-        sendJson(res, 400, { error: queried.message })
+        sendJson(res, queried.code === 'REVISION_CONFLICT' ? 409 : 400, { error: queried.message, code: queried.code })
         return
       }
-      sendJson(res, 200, queried.result)
+      sendJson(res, 200, { ...queried.result, administrator: adminBinding?.sessionId ?? null })
     } catch (error) {
       sendJson(res, error.statusCode ?? 500, { error: error.message })
+    }
+  }
+
+  // PAGE-20 管理员会话入口:创建空管理员会话并登记绑定,幂等收养;绝不发送 prompt。
+  let adminCreateInFlight = null
+  async function handleAdmin(req, res) {
+    try {
+      if (rejectCrossOrigin(req, res)) return
+      const raw = await readBody(req).catch((error) => { throw Object.assign(error, { statusCode: error.statusCode ?? 400 }) })
+      let body = {}
+      try {
+        body = raw ? JSON.parse(raw) : {}
+      } catch {
+        sendJson(res, 400, { error: '请求体不是合法 JSON' })
+        return
+      }
+      if (body.action !== 'create') {
+        sendJson(res, 400, { error: 'action 须为 create', code: 'ADMIN_CREATE_REJECTED' })
+        return
+      }
+      // replace:原绑定会话不可达时的显式重建,覆盖绑定;任务与历史记录不受影响
+      const replace = body.replace === true
+      if (!replace) {
+        const existing = await store.loadAdminBinding()
+        if (existing?.sessionId) {
+          sendJson(res, 200, { ok: true, sessionId: existing.sessionId, created: false })
+          return
+        }
+      }
+      if (!drive?.sessionAdapter) {
+        sendJson(res, 501, { error: '会话适配未装配', code: 'ADMIN_CREATE_REJECTED' })
+        return
+      }
+      const sessionId = await (adminCreateInFlight ??= (async () => {
+        const created = await drive.sessionAdapter.ensureSession({ agentPreset: ADMIN_PRESET_ID })
+        if (!created?.sessionId) throw Object.assign(new Error('会话创建未返回 sessionId'), { statusCode: 500 })
+        await store.updateAdminBinding((current) => (!replace && current?.sessionId) ? current : { sessionId: created.sessionId, createdAt: now() })
+        return created.sessionId
+      })())
+      sendJson(res, 200, { ok: true, sessionId, created: true })
+    } catch (error) {
+      sendJson(res, error.statusCode ?? 500, { error: error.message })
+    } finally {
+      adminCreateInFlight = null
     }
   }
 
@@ -247,7 +295,7 @@ export function createBoardApi({ store, drive, now = Date.now }) {
           actorRole: body.phase === 'accept' ? 'reviewer' : 'executor',
           requestId: body.requestId ?? `req-${now().toString(36)}`,
           content: body.content ?? `任务 ${body.taskId}/${body.workItemId}`,
-          presetId: body.presetId ?? 'ai-team-worker',
+          presetId: body.presetId ?? 'boss-simulator-worker',
           sessionAdapter: drive.sessionAdapter,
           globalControl: control,
           sessionWorkspaceId: body.sessionWorkspaceId,
@@ -306,5 +354,5 @@ export function createBoardApi({ store, drive, now = Date.now }) {
     }
   }
 
-  return { handleBoard, handleInterrupt, handleSettings, handleDrive }
+  return { handleBoard, handleAdmin, handleInterrupt, handleSettings, handleDrive }
 }

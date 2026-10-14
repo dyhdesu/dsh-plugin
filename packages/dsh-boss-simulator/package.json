@@ -1,6 +1,6 @@
 {
-  "name": "@mzzsfy/dsh-ai-team",
-  "description": "AI 团队任务控制室:管理员/调度员/实施/验收角色编排 DSH 会话完成任务,含看板、时间线、中断恢复",
+  "name": "@mzzsfy/dsh-boss-simulator",
+  "description": "公司管理模拟器:以老板身份安排任务,分派给部门自治执行,只接受汇报;含看板、时间线、中断恢复",
   "version": "0.1.0",
   "type": "module",
   "main": "lib/index.js",
@@ -35,9 +35,7 @@
   "files": [
     "lib",
     "src",
-    "preset",
-    "cordis.patch.yml",
-    "README.md"
+    "cordis.patch.yml"
   ],
   "peerDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",

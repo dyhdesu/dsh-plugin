@@ -10,7 +10,7 @@ function seeded() {
   let agg = createTask({ taskId: 't-n', title: 'n', projectWorkspaceId: 'ws', definition: { goal: 'g', acceptanceCriteria: [{ criterionId: 'c1', text: 'c' }], dependencyTaskIds: [] }, now }).result
   agg = defineWorkItem(agg, { workItemId: 'w1', title: 'w', requiredCriterionIds: ['c1'] }).result.aggregate
   agg = authorizeTask(agg, { sourceMessageRef: { sessionId: 's0', messageId: 'm0' } }).result.aggregate
-  return recordRun(agg, { runId: 'r1', workItemId: 'w1', phase: 'implement', sessionId: 's1', requestId: 'q1', presetId: 'ai-team-worker', slotKey: 'w1', globalControl: { globalStopped: false, globalStopGeneration: 0, taskAllows: {} } }).result.aggregate
+  return recordRun(agg, { runId: 'r1', workItemId: 'w1', phase: 'implement', sessionId: 's1', requestId: 'q1', presetId: 'boss-simulator-worker', slotKey: 'w1', globalControl: { globalStopped: false, globalStopGeneration: 0, taskAllows: {} } }).result.aggregate
 }
 
 test('notice 记录幂等:同 noticeId 重放不产生第二条', () => {

@@ -16,7 +16,7 @@ function seededAggregate() {
 }
 
 function withRun(agg) {
-  return recordRun(agg, { runId: 'r1', workItemId: 'w1', phase: 'implement', sessionId: 's1', requestId: 'q1', presetId: 'ai-team-worker', slotKey: 'w1', globalControl: { globalStopped: false, globalStopGeneration: 0, taskAllows: {} } }).result.aggregate
+  return recordRun(agg, { runId: 'r1', workItemId: 'w1', phase: 'implement', sessionId: 's1', requestId: 'q1', presetId: 'boss-simulator-worker', slotKey: 'w1', globalControl: { globalStopped: false, globalStopGeneration: 0, taskAllows: {} } }).result.aggregate
 }
 
 const USAGE = { invocationKey: 'inv-1', inputTokens: 10, outputTokens: 5, model: 'm' }
@@ -33,7 +33,7 @@ test('retry 同 invocationKey 不双计,不一致拒绝', () => {
 
 test('fork 继承同 key 归并到首 Run,跨 Run 不重复入总量', () => {
   let agg = withRun(seededAggregate())
-  agg = recordRun(agg, { runId: 'r2', workItemId: 'w1', phase: 'implement', sessionId: 's2', requestId: 'q2', presetId: 'ai-team-worker', globalControl: { globalStopped: false, globalStopGeneration: 0, taskAllows: {} } }).result.aggregate
+  agg = recordRun(agg, { runId: 'r2', workItemId: 'w1', phase: 'implement', sessionId: 's2', requestId: 'q2', presetId: 'boss-simulator-worker', globalControl: { globalStopped: false, globalStopGeneration: 0, taskAllows: {} } }).result.aggregate
   agg = mergeRunUsage(agg, { runId: 'r1', usage: USAGE }).result.aggregate
   // fork 子 Run 回报同 invocationKey(继承父调用),不双计
   const merged = mergeRunUsage(agg, { runId: 'r2', usage: { ...USAGE } })

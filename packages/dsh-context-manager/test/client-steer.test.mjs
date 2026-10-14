@@ -327,20 +327,23 @@ test('steerRecallSvg:DOM 元素形态,16px viewBox 双路径 stroke 描边', () 
 
 // 注入契约(源码级守卫,与 client-fork.test.mjs 的 fork 契约同构):
 // 显隐由 inbox 投影行集驱动——行在注入、行不在摘除,投影订阅保证应用后即时消失。
+// pending 与 durable 双路径:pending 气泡(data-pending-steering,无 node-key)按
+// 渲染文本对齐投影行,durable 气泡按 node-key messageId 匹配。
 // 锚定 SteerRecallDock 函数体切片:防止常量定义行/注释文本满足 grep 造成守卫空转
-test('SteerRecallDock 注入契约:steering 气泡锚点、投影驱动显隐、官方类克隆与清理齐备', () => {
+test('SteerRecallDock 注入契约:双路径气泡锚点、投影驱动显隐、官方类克隆与清理齐备', () => {
   const DOCK_START = CLIENT_SRC.indexOf('function SteerRecallDock(')
   const DOCK_END = CLIENT_SRC.indexOf('// 对话 fork:')
   assert.ok(DOCK_START > 0 && DOCK_END > DOCK_START, 'SteerRecallDock 切片定位失败')
   const dock = CLIENT_SRC.slice(DOCK_START, DOCK_END)
-  assert.ok(dock.includes("querySelectorAll('[' + FLOW_KIND_ATTR + '=\"steering\"]')"), '应按 steering 流标记扫描消息气泡')
+  assert.ok(dock.includes("'[' + FLOW_KIND_ATTR + '=\"steering\"], [' + STEER_PENDING_ATTR + ']'"), '应同时扫描 durable steering 气泡与 Host pending steering 气泡')
   assert.ok(dock.includes("button.setAttribute(STEER_BTN_FLAG, '')"), '注入按钮应带自家标记(防重复注入与误删官方节点)')
   assert.ok(dock.includes("bubble.querySelector('[' + STEER_BTN_FLAG + ']')"), '应按气泡范围查询防重标记(同一查询点承担行不在时的摘除)')
-  assert.ok(dock.includes('!rows.some((item) => item.id === match[1])'), '投影行不在应不注入并摘除残留按钮')
+  assert.ok(dock.includes('STEER_NODE_KEY_RE'), 'durable 气泡应经 node-key 正则提取 messageId 匹配投影行')
+  assert.ok(dock.includes('hasAttribute(STEER_PENDING_ATTR)'), 'pending 气泡应按渲染文本对齐投影行(无 messageId 可用)')
+  assert.ok(dock.includes('consumed.add(String(row.id))'), 'pending 文本匹配应按 id 去重消费(同文多行不误配)')
   assert.ok(dock.includes('face.subscribe'), '应订阅 inbox 投影,应用后驱动重扫摘除按钮')
   assert.ok(dock.includes('button.className = official.className'), '应克隆官方按钮类名(尺寸/hover/悬停显隐原生)')
-  assert.ok(dock.includes('STEER_NODE_KEY_RE'), '应经 node-key 正则提取 messageId 匹配投影行')
-  assert.ok(dock.includes('button.closest('), '点击应实时重读气泡 node-key(防节点复用后注入瞬间 id 过期)')
+  assert.ok(dock.includes("button.closest('[' + FLOW_KIND_ATTR + '=\"steering\"], [' + STEER_PENDING_ATTR + ']'"), '点击应实时重读气泡(pending 与 durable 同构)')
   assert.ok(dock.includes('forEach((button) => button.remove())'), '卸载/停用应移除全部已注入按钮')
   assert.ok(dock.includes('插话已被应用,无法撤回'), '点击竞态窗口内被应用应降级提示')
   assert.ok(dock.includes('含附件的插话不支持撤回'), '含附件行点击应明确提示')
@@ -351,7 +354,7 @@ test('SteerRecallDock 注入契约:steering 气泡锚点、投影驱动显隐、
 
 // DOM 桩:单 steering 气泡 + 操作排;querySelector 动态反映当前注入态(防重与
 // 摘除断言依赖);face 订阅记录回调,手动触发模拟投影更新;effect 手动执行
-function mountScanHarness({ faceRows, updateQueue, setDraft } = {}) {
+function mountScanHarness({ faceRows, updateQueue, setDraft, pendingBubble = false } = {}) {
   const modules = []
   const registered = []
   const effects = []
@@ -378,7 +381,13 @@ function mountScanHarness({ faceRows, updateQueue, setDraft } = {}) {
     querySelector(sel) { return sel.startsWith('button:not(') ? official : null },
   }
   const bubble = {
-    attrs: { 'data-chat-node-key': '5:input-messagem1', 'data-chat-flow-kind': 'steering' },
+    attrs: {
+      'data-chat-node-key': pendingBubble ? null : '5:input-messagem1',
+      'data-chat-flow-kind': pendingBubble ? null : 'steering',
+      'data-pending-steering': pendingBubble ? '' : null,
+    },
+    textContent: pendingBubble ? '帮我看下' : '',
+    hasAttribute(k) { return this.attrs[k] !== null && this.attrs[k] !== undefined },
     getAttribute(k) { return this.attrs[k] !== undefined ? this.attrs[k] : null },
     querySelector(sel) {
       if (sel === '[class$="_actions"]') return actionsRow
@@ -406,7 +415,7 @@ function mountScanHarness({ faceRows, updateQueue, setDraft } = {}) {
     createElement: () => makeButton(),
     createElementNS: () => ({ setAttribute() {}, appendChild() {} }),
     querySelectorAll(sel) {
-      if (sel.includes('data-chat-flow-kind="steering"')) return [bubble]
+      if (sel.includes('data-chat-flow-kind="steering"') || sel.includes('data-pending-steering')) return [bubble]
       if (sel.includes('data-cx-steer-recall')) return currentRecall() ? [currentRecall()] : []
       return []
     },
@@ -473,6 +482,28 @@ function mountScanHarness({ faceRows, updateQueue, setDraft } = {}) {
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+test('scan pending 行:Host optimistic bubble 无 node-key 时仍注入撤回', () => {
+  const h = mountScanHarness({ faceRows: [INBOX_MESSAGE], pendingBubble: true })
+  assert.equal(h.injected.length, 1, 'Host pending-steering bubble 无 data-chat-flow-kind/node-key 仍须匹配其 next-step 行')
+})
+
+test('scan pending 点击:按文本对齐行走 remove 主路径并回填', async () => {
+  const calls = []
+  const h = mountScanHarness({
+    faceRows: [INBOX_MESSAGE],
+    pendingBubble: true,
+    updateQueue: async (itemId, action) => { calls.push({ itemId, action }); return { ok: true } },
+    setDraft: (text) => calls.push({ setDraft: text }),
+  })
+  h.injected[0].listeners.click()
+  await settle()
+  assert.deepEqual(calls, [
+    { itemId: 'm1', action: { kind: 'remove' } },
+    { setDraft: '帮我看下' },
+  ], 'pending 气泡点击应按文本对齐行发起 remove 并回填')
+  assert.equal(h.toastCalls.at(-1).text, '已撤回到输入框')
+})
 
 test('scan 投影驱动:行在注入,行不在不注入;scan effect 依赖 inboxFace', () => {
   const on = mountScanHarness({ faceRows: [INBOX_MESSAGE] })

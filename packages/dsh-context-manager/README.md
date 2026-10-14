@@ -21,8 +21,9 @@
 未应用插话气泡(消息流 steering 项)操作排的撤回图标:点击撤回到输入框重新编辑。RPC 走会话绑定面 `binding.session.updateQueue`,不与官方会话服务耦合。
 
 - 注入形态同 fork(官方复制按钮模式):克隆官方按钮类,尺寸/hover/悬停显隐原生;显隐由 inbox 投影行集驱动——行在(未应用)注入,行不在(已应用/已撤回)即时摘除,投影订阅驱动重扫
+- 气泡双阶段全覆盖:插话发送后第一阶段为 Host optimistic pending 气泡(`data-pending-steering`,无 node-key,按渲染文本对齐投影行),消费后转 durable steering 气泡(`data-chat-flow-kind="steering"`,按 node-key messageId 匹配)——pending 文本不一致(Markdown 渲染)时不注入,降级等 durable,失败方向安全
 - 图标在场即暗示可撤:点击与投影更新之间的竞态窗口由「行不在降级提示 / remove 失败提示」兜底;含附件的插话点击明确提示不支持
-- 匹配:气泡 `data-chat-node-key` 的 `input-message` 后缀与 `next-step` 投影行 id 同源(官方两侧同用 `String(event.data.id)`),点击时实时重读防节点复用后过期
+- 匹配:durable 气泡 `data-chat-node-key` 的 `input-message` 后缀与 `next-step` 投影行 id 同源(官方两侧同用 `String(event.data.id)`),点击时实时重读防节点复用后过期
 
 ### 对话分叉(fork,重写式)
 

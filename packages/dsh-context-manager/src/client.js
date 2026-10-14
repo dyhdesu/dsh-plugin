@@ -875,6 +875,9 @@ const BUBBLE_ACTIONS_SUFFIX = '[class$="_actions"]'
 const STEER_NODE_KEY_RE = /input-message(.+)$/
 // 气泡 node-key 属性名(与 TURN_ATTR/FLOW_KIND_ATTR 同族的官方流标记)
 const NODE_KEY_ATTR = 'data-chat-node-key'
+// Host optimistic pending steering bubble 标记(dsh-client-ui-chat PendingSteeringBubble,
+// 插话发送后的第一阶段气泡,无 flow-kind/node-key;消费后转 durable steering 节点)
+const STEER_PENDING_ATTR = 'data-pending-steering'
 // 宿主 inbox 投影:未应用插话驻留的队列键(dsh 0.2.0 语义)
 const INBOX_STEER_KEY = 'inbox'
 const INBOX_STEER_QUEUE = 'next-step'
@@ -945,18 +948,30 @@ function SteerRecallDock({ useSession, inputActions, updateQueue, inboxFace }) {
       }
       const snapshot = deps.inboxFace.getSnapshot()
       const rows = steerRowsOfInbox(snapshot && snapshot[INBOX_STEER_QUEUE])
-      const bubbles = document.querySelectorAll('[' + FLOW_KIND_ATTR + '="steering"]')
+      const rowsById = new Map(rows.map((item) => [String(item.id), item]))
+      // 两类可见气泡:durable steering(flow wrapper 带 node-key)与 Host optimistic
+      // pending(data-pending-steering 根节点,无任何 key)。pending 是插话发送后的
+      // 第一阶段,durable 是其消费后的转录形态;两阶段都必须可见可撤
+      const bubbles = document.querySelectorAll(
+        '[' + FLOW_KIND_ATTR + '="steering"], [' + STEER_PENDING_ATTR + ']',
+      )
+      const consumed = new Set()
       bubbles.forEach((bubble) => {
-        // node-key 形如 {seq}:input-message{messageId};无 node-key 的气泡点击无从
-        // 匹配投影行,不注入(具体 id 点击时实时重读,防节点复用后过期)
-        const match = STEER_NODE_KEY_RE.exec(bubble.getAttribute(NODE_KEY_ATTR) || '')
-        if (!match) return
-        // 显隐由投影行集驱动:行在=未应用才注入;行不在=已应用/已撤回,摘除残留按钮
         const existing = bubble.querySelector('[' + STEER_BTN_FLAG + ']')
-        if (!rows.some((item) => item.id === match[1])) {
+        const nodeKey = bubble.getAttribute(NODE_KEY_ATTR) || ''
+        const match = STEER_NODE_KEY_RE.exec(nodeKey)
+        let row = match ? rowsById.get(match[1]) : null
+        // pending 气泡无 messageId:以渲染文本对齐投影行(去重消费,同文取首条);
+        // Markdown 渲染导致文本不一致时匹配失败 = 不注入,降级到 durable 阶段,安全方向
+        if (!row && bubble.hasAttribute(STEER_PENDING_ATTR)) {
+          const visible = (bubble.textContent || '').trim()
+          row = rows.find((item) => !consumed.has(String(item.id)) && item.text !== null && item.text.trim() === visible) || null
+        }
+        if (!row) {
           if (existing) existing.remove()
           return
         }
+        consumed.add(String(row.id))
         if (existing) return
         const actionsRow = bubble.querySelector(BUBBLE_ACTIONS_SUFFIX)
         if (!actionsRow) return
@@ -975,21 +990,28 @@ function SteerRecallDock({ useSession, inputActions, updateQueue, inboxFace }) {
           // 注入瞬间固化的 id 会指向已不在此气泡的消息
           const current = depsRef.current
           if (!current || !current.queueMutable || !current.inboxFace || typeof current.inboxFace.getSnapshot !== 'function') return
-          const node = button.closest('[' + FLOW_KIND_ATTR + '="steering"]')
-          const match = node && STEER_NODE_KEY_RE.exec(node.getAttribute(NODE_KEY_ATTR) || '')
-          if (!match) return
-          const snapshot = current.inboxFace.getSnapshot()
-          const row = steerRowsOfInbox(snapshot && snapshot[INBOX_STEER_QUEUE]).find((item) => item.id === match[1])
-          if (!row) {
+          const node = button.closest('[' + FLOW_KIND_ATTR + '="steering"], [' + STEER_PENDING_ATTR + ']')
+          if (!node) return
+          const nodeMatch = STEER_NODE_KEY_RE.exec(node.getAttribute(NODE_KEY_ATTR) || '')
+          const currentSnapshot = current.inboxFace.getSnapshot()
+          const currentRows = steerRowsOfInbox(currentSnapshot && currentSnapshot[INBOX_STEER_QUEUE])
+          // 点击重读行:durable 按 messageId;pending 无 key,按渲染文本回退
+          // (与 scan 同向,文本不一致时降级提示,绝不误撤)
+          const currentRow = nodeMatch
+            ? currentRows.find((item) => String(item.id) === nodeMatch[1])
+            : node.hasAttribute(STEER_PENDING_ATTR)
+              ? currentRows.find((item) => item.text !== null && item.text.trim() === (node.textContent || '').trim())
+              : null
+          if (!currentRow) {
             toast('插话已被应用,无法撤回', { kind: 'error' })
             return
           }
-          if (row.text === null) {
+          if (currentRow.text === null) {
             toast('含附件的插话不支持撤回', { kind: 'error' })
             return
           }
           button.disabled = true
-          void withdrawSteer(row, { updateQueue: current.updateQueue, setDraft: current.inputActions.setDraft, notify: toast })
+          void withdrawSteer(currentRow, { updateQueue: current.updateQueue, setDraft: current.inputActions.setDraft, notify: toast })
             .finally(() => { button.disabled = false })
         })
         button.appendChild(steerRecallSvg())
@@ -1261,7 +1283,7 @@ function ForkDock({ session, forkSession, cancelSession, turnEnds, refreshRef })
 // 裁剪,JS 定位复杂度不成比例);文案与功能行为同源维护,由源码契约测试锁定
 const HISTORY_SWITCH_TITLE = '在输入框按 Alt+↑ 唤起历史输入浮层,浏览并回填历史输入;浮层内 ←/→ 切换范围,点击顶栏范围标签展开选择(常用 / 当前会话 / 本工作区 / 全部工作区),顶部搜索框过滤条目,行悬停星标可收藏常用提示词。停用后快捷键与浮层整体关闭,刷新页面生效。'
 const HISTORY_BUTTON_SWITCH_TITLE = '输入框下方工具排显示历史输入按钮,点击打开浮层,再点关闭,与 Alt+↑ 等效;停用仅隐藏按钮,快捷键与浮层不受影响;刷新页面生效。'
-const STEER_SWITCH_TITLE = '未应用插话气泡的操作排显示撤回图标(与复制按钮同排),点击撤回并把原文填回输入框(覆盖输入框现有草稿);插话被应用后图标随队列投影摘除;点击瞬间恰好被应用的仅提示不可撤回;含附件的插话不支持撤回;停用即移除已注入图标,刷新页面生效。'
+const STEER_SWITCH_TITLE = '未应用插话气泡的操作排显示撤回图标(与复制按钮同排),点击撤回并把原文填回输入框(覆盖输入框现有草稿);图标覆盖插话的 pending 阶段(刚发出、尚未进入对话流)与 durable 阶段(已进入对话流未应用),被应用后随队列投影摘除;点击瞬间恰好被应用的仅提示不可撤回;含附件的插话不支持撤回;停用即移除已注入图标,刷新页面生效。'
 const FORK_SWITCH_TITLE = '消息气泡操作排显示分叉按钮,点击分叉出新会话到该轮之前(该轮不带入子会话),该轮的用户输入自动回填子会话输入框供编辑重发,子会话自动打开且标题尾号递增;进行中的轮(回复尚未完成)同样可分叉,分叉后自动停止本会话该轮未完成的回复;首轮(无更早上下文可继承,新建会话即为同义操作)与无文本输入的轮(纯图等,无从重发)不注入;停用即不再注入,刷新页面生效。'
 const FORK_AUTO_RESEND_SWITCH_TITLE = '分叉成功后自动把该轮原输入发送到子会话立即开跑(重生成语义,相当于原输入重跑一遍);关闭时分叉仅把原输入回填子会话输入框,由你编辑后再手动发送。'
 const COPY_SID_SWITCH_TITLE = '会话标题栏显示复制 sessionId 按钮,平时隐藏,鼠标移到标题栏任意位置时显示,点击复制当前会话 id 到剪贴板(便于粘贴给他人排查或脚本引用);关闭后按钮整体不渲染,刷新页面生效。'

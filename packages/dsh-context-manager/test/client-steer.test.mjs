@@ -135,7 +135,7 @@ const INBOX_MESSAGE = {
   source: { kind: 'user' },
   content: [{ type: 'text', text: '帮我看下' }],
 }
-const STEERING_ROW = { id: 'm1', preview: '帮我看下', text: '帮我看下' }
+const STEERING_ROW = { id: 'm1', source: { kind: 'user' }, preview: '帮我看下', text: '帮我看下' }
 
 test('steerRowsOfInbox:仅保留 user 来源的 next-step 行,映射为撤回行', () => {
   const messages = [
@@ -233,34 +233,15 @@ test('withdrawSteer 摘除成功但回填抛错:兜底展示原文,不报成功'
 
 // createElement 桩记录调用树:h(type, props, ...children) -> {type, props, children}
 // useStateValues:按调用序覆盖各 useState 初始值(超出部分用组件默认),供渲染态断言
-function loadComponent(useStateValues = [], { captureEffects = false } = {}) {
+function loadComponent() {
   const modules = []
   const registered = []
-  const effects = []
   const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
-  const element = (type, props, ...children) => ({ type, props, children })
-  let call = 0
-  let refCall = 0
-  // useState/useRef 有状态桩:setter 写回槽位、ref 跨调用持久(模拟 React 更新周期)
-  const slots = []
-  const refs = []
   const reactStub = {
-    useState: (value) => {
-      const i = call
-      call += 1
-      if (!(i in slots)) slots[i] = i < useStateValues.length ? useStateValues[i] : value
-      return [slots[i], (v) => { slots[i] = typeof v === 'function' ? v(slots[i]) : v }]
-    },
-    useEffect: (fn) => {
-      if (captureEffects) effects.push(fn)
-    },
-    useRef: (value) => {
-      const i = refCall
-      refCall += 1
-      if (!(i in refs)) refs[i] = { current: value }
-      return refs[i]
-    },
-    createElement: element,
+    useState: (value) => [value, () => {}],
+    useEffect: () => {},
+    useRef: (value) => ({ current: value }),
+    createElement: (type, props, ...children) => ({ type, props, children }),
   }
   const requireStub = (name) => {
     if (name === '@mzzsfy/dsh-toast/client') return { show: () => 0 }
@@ -292,14 +273,7 @@ function loadComponent(useStateValues = [], { captureEffects = false } = {}) {
   mod.apply(ctx)
   const entry = registered.find((item) => item.options.id === 'context-manager-steer')
   assert.ok(entry, '组件级测试未捕获插话撤回条目')
-  // 每次组件调用重置 hooks 槽位游标(一次调用 = 一轮渲染,槽位序号从 0 起)
-  const raw = entry.component
-  const component = (...args) => {
-    call = 0
-    refCall = 0
-    return raw(...args)
-  }
-  return { component, effects }
+  return { component: entry.component }
 }
 
 const DOCK_COMPONENT = loadComponent()
@@ -307,12 +281,10 @@ const NO_ACTIONS = { setDraft: () => {} }
 const OK_UPDATE = async () => ({ ok: true })
 
 // useSession 桩:两次 selector 读取共用同一快照(与官方 SessionSnapshotSelector 单快照同构)
-// rows:注入 useState 的行集初始值(组件订阅投影后由 setRows 更新,桩环境静态注入)
-function dockWith(snapshot, rows = []) {
+function dockWith(snapshot) {
   const useSession = (selector) => selector(snapshot)
-  const inboxFace = { getSnapshot: () => ({}) }
-  const dock = loadComponent([false, true, rows])
-  return (props) => dock.component({ useSession, inputActions: NO_ACTIONS, updateQueue: OK_UPDATE, inboxFace, ...props })
+  const dock = loadComponent()
+  return (props) => dock.component({ useSession, inputActions: NO_ACTIONS, updateQueue: OK_UPDATE, inboxFace: { getSnapshot: () => ({}) }, ...props })
 }
 
 test('SteerRecallDock 干净禁用:依赖任一缺失即返回 null', () => {
@@ -323,106 +295,261 @@ test('SteerRecallDock 干净禁用:依赖任一缺失即返回 null', () => {
 })
 
 test('SteerRecallDock 干净禁用:subagent 非 continuable 即返回 null', () => {
-  const locked = dockWith({ subagent: { address: { mode: 'prompt' } } }, [STEERING_ROW])
+  const locked = dockWith({ subagent: { address: { mode: 'prompt' } } })
   assert.equal(locked({}), null, 'queueMutable 为假应不渲染')
 })
 
-test('SteerRecallDock 渲染:投影行映射为撤回行,含附件行禁用', () => {
-  const dock = dockWith({ subagent: null }, [STEERING_ROW, { id: 'm2', text: null, preview: null }])
-  dock({}) // 首帧:faceRef 校验未通过(与 React 挂载帧一致),行集按空渲染
-  const host = dock({})
+test('SteerRecallDock 渲染:依赖齐备时零占位宿主(注入面由 MutationObserver 承担)', () => {
+  const host = dockWith({ subagent: null })({})
   assert.equal(host.type, 'div')
-  assert.equal(host.props.className, 'cx-steer', '应渲染撤回行宿主')
-  const rowsUi = host.children[0]
-  assert.equal(rowsUi.length, 2, '每行投影行对应一个撤回行')
-  const firstBtn = rowsUi[0].children[0]
-  assert.equal(firstBtn.props.disabled, false, '纯文本行可撤回')
-  assert.ok(firstBtn.props.title.includes('撤回到输入框'), '标题含撤回语义与预览')
-  const secondBtn = rowsUi[1].children[0]
-  assert.equal(secondBtn.props.disabled, true, '含附件行禁用')
-  assert.equal(secondBtn.props.title, '含附件的插话不可撤回')
+  assert.equal(host.props.className, 'cx-steer-host', '应渲染零占位宿主')
 })
 
-test('SteerRecallDock 渲染:face 变更的首帧按空行集渲染(防旧会话行闪现)', () => {
-  const dock = dockWith({ subagent: null }, [STEERING_ROW])
-  dock({}) // face A 初始化
-  const other = { getSnapshot: () => ({}) }
-  assert.equal(dock({ inboxFace: other }), null, 'face 切换首帧不得渲染旧 face 的行集')
-  dock({ inboxFace: other })
-  assert.equal(dock({ inboxFace: other }).props.className, 'cx-steer', '同 face 稳定后恢复渲染')
+// 撤回图标 svg:DOM 形态(注入按钮走 DOM 路径,与 forkSvg 同构)
+test('steerRecallSvg:DOM 元素形态,16px viewBox 双路径 stroke 描边', () => {
+  const SVG_START = CLIENT_SRC.indexOf('function steerRecallSvg(')
+  const SVG_END = CLIENT_SRC.indexOf('function forkSvg(')
+  assert.ok(SVG_START > 0 && SVG_END > SVG_START, 'steerRecallSvg 切片定位失败')
+  const created = []
+  const el = () => {
+    const node = { attrs: {}, children: [], appendChild(child) { this.children.push(child) }, setAttribute(k, v) { this.attrs[k] = v } }
+    created.push(node)
+    return node
+  }
+  const svg = new Function('document', CLIENT_SRC.slice(SVG_START, SVG_END) + '; return steerRecallSvg()')({ createElementNS: el })
+  assert.equal(created.length, 3, '应创建 1 个 svg + 2 个 path')
+  assert.equal(svg, created[0])
+  assert.equal(svg.attrs.width, '16')
+  assert.equal(svg.attrs.height, '16')
+  assert.equal(svg.attrs.viewBox, '0 0 16 16')
+  assert.equal(svg.children.length, 2, 'undo 弯箭头应由两条 stroke 路径构成')
 })
 
-test('SteerRecallDock 渲染:空行集(行已应用/摘除)不渲染零占位', () => {
-  assert.equal(dockWith({ subagent: null }, [])({}), null, '行集为空应不渲染')
+// 注入契约(源码级守卫,与 client-fork.test.mjs 的 fork 契约同构):
+// 显隐由 inbox 投影行集驱动——行在注入、行不在摘除,投影订阅保证应用后即时消失。
+// 锚定 SteerRecallDock 函数体切片:防止常量定义行/注释文本满足 grep 造成守卫空转
+test('SteerRecallDock 注入契约:steering 气泡锚点、投影驱动显隐、官方类克隆与清理齐备', () => {
+  const DOCK_START = CLIENT_SRC.indexOf('function SteerRecallDock(')
+  const DOCK_END = CLIENT_SRC.indexOf('// 对话 fork:')
+  assert.ok(DOCK_START > 0 && DOCK_END > DOCK_START, 'SteerRecallDock 切片定位失败')
+  const dock = CLIENT_SRC.slice(DOCK_START, DOCK_END)
+  assert.ok(dock.includes("querySelectorAll('[' + FLOW_KIND_ATTR + '=\"steering\"]')"), '应按 steering 流标记扫描消息气泡')
+  assert.ok(dock.includes("button.setAttribute(STEER_BTN_FLAG, '')"), '注入按钮应带自家标记(防重复注入与误删官方节点)')
+  assert.ok(dock.includes("bubble.querySelector('[' + STEER_BTN_FLAG + ']')"), '应按气泡范围查询防重标记(同一查询点承担行不在时的摘除)')
+  assert.ok(dock.includes('!rows.some((item) => item.id === match[1])'), '投影行不在应不注入并摘除残留按钮')
+  assert.ok(dock.includes('face.subscribe'), '应订阅 inbox 投影,应用后驱动重扫摘除按钮')
+  assert.ok(dock.includes('button.className = official.className'), '应克隆官方按钮类名(尺寸/hover/悬停显隐原生)')
+  assert.ok(dock.includes('STEER_NODE_KEY_RE'), '应经 node-key 正则提取 messageId 匹配投影行')
+  assert.ok(dock.includes('button.closest('), '点击应实时重读气泡 node-key(防节点复用后注入瞬间 id 过期)')
+  assert.ok(dock.includes('forEach((button) => button.remove())'), '卸载/停用应移除全部已注入按钮')
+  assert.ok(dock.includes('插话已被应用,无法撤回'), '点击竞态窗口内被应用应降级提示')
+  assert.ok(dock.includes('含附件的插话不支持撤回'), '含附件行点击应明确提示')
+  assert.ok(dock.includes('if (!current || !current.queueMutable || !current.inboxFace'), '点击应与 scan 同款依赖守卫(face falsy/锁定态不执行)')
 })
 
-test('SteerRecallDock 渲染:停用开关(挂载拉取后为关)不渲染', () => {
-  const dock = loadComponent([false, false, [STEERING_ROW]])
-  const useSession = (selector) => selector({ subagent: null })
-  const host = dock.component({ useSession, inputActions: NO_ACTIONS, updateQueue: OK_UPDATE, inboxFace: { getSnapshot: () => ({}) } })
-  assert.equal(host, null, 'enabled=false 应不渲染')
-})
+// ── 组件级 scan 行为:投影行集驱动注入/摘除(MutationObserver 与投影 face 可控行使) ──
 
-test('SteerRecallDock 订阅:face 推送驱动行集更新,行映射渲染,退订生效', () => {
-  // fake face:可手动推送快照,记录订阅与退订
-  let snapshot = { 'next-step': [] }
-  const listeners = new Set()
-  const face = {
-    getSnapshot: () => snapshot,
-    subscribe: (fn) => {
-      listeners.add(fn)
-      return () => listeners.delete(fn)
+// DOM 桩:单 steering 气泡 + 操作排;querySelector 动态反映当前注入态(防重与
+// 摘除断言依赖);face 订阅记录回调,手动触发模拟投影更新;effect 手动执行
+function mountScanHarness({ faceRows, updateQueue, setDraft } = {}) {
+  const modules = []
+  const registered = []
+  const effects = []
+  const subscribers = []
+  const injected = []
+  const toastCalls = []
+  let unsubscribed = false
+  let enabledSlot = true
+  let refCall = 0
+  const refs = []
+  const makeButton = () => ({
+    attrs: {}, listeners: {}, className: '', title: '', type: undefined, disabled: false, removed: false,
+    setAttribute(k, v) { this.attrs[k] = v },
+    addEventListener(name, fn) { this.listeners[name] = fn },
+    appendChild() {},
+    remove() { this.removed = true },
+    closest() { return bubble },
+  })
+  const official = makeButton()
+  let currentButton = null
+  const currentRecall = () => (currentButton && !currentButton.removed ? currentButton : null)
+  const actionsRow = {
+    appendChild(child) { currentButton = child; injected.push(child) },
+    querySelector(sel) { return sel.startsWith('button:not(') ? official : null },
+  }
+  const bubble = {
+    attrs: { 'data-chat-node-key': '5:input-messagem1', 'data-chat-flow-kind': 'steering' },
+    getAttribute(k) { return this.attrs[k] !== undefined ? this.attrs[k] : null },
+    querySelector(sel) {
+      if (sel === '[class$="_actions"]') return actionsRow
+      if (sel === '[' + 'data-cx-steer-recall' + ']') return currentRecall()
+      return null
     },
   }
-  const dock = loadComponent([false, true, []], { captureEffects: true })
-  const renders = []
-  const render = (props) => {
-    const out = dock.component({ useSession: (s) => s({ subagent: null }), inputActions: NO_ACTIONS, updateQueue: OK_UPDATE, inboxFace: face, ...props })
-    renders.push(out)
-    return out
+  const reactStub = {
+    // enabled 槽位化:setter 写回,停用测试经返回的 setEnabled 拨关后重扫;
+    // useRef 槽位持久(同一调用序返回同一 ref 对象,跨渲染保持 current)
+    useState: (value) => [enabledSlot, (v) => { enabledSlot = typeof v === 'function' ? v(enabledSlot) : v }],
+    useEffect: (fn, deps) => effects.push({ fn, deps }),
+    useRef: (value) => {
+      const i = refCall
+      refCall += 1
+      if (!(i in refs)) refs[i] = { current: value }
+      return refs[i]
+    },
+    createElement: (type, props, ...children) => ({ type, props, children }),
   }
-  // 首渲染 + 手动执行 effects(挂载):订阅建立并拉取空快照(effects[1] 为订阅,effects[0] 为启停拉取)
-  render({})
-  assert.equal(listeners.size, 0, 'effects 未执行前不应订阅')
-  const mountCleanup = dock.effects[1]()
-  assert.equal(listeners.size, 1, '挂载后应建立订阅')
-  assert.equal(typeof mountCleanup, 'function', '订阅应返回退订函数')
-  assert.equal(renders.at(-1), null, '空行集首渲染不输出')
-  // 推送:user 行入投影 → setRows 调度 → 重渲染映射为撤回行
-  snapshot = { 'next-step': [INBOX_MESSAGE] }
-  listeners.forEach((fn) => fn())
-  render({})
-  const host = renders.at(-1)
-  assert.equal(host && host.props.className, 'cx-steer', '推送后应渲染撤回行宿主')
-  assert.equal(host.children[0].length, 1, 'user 行映射为一条撤回行')
-  // 推送:行摘除 → 回到零占位
-  snapshot = { 'next-step': [] }
-  listeners.forEach((fn) => fn())
-  render({})
-  assert.equal(renders.at(-1), null, '行摘除后应回到零占位')
-  // 卸载:执行挂载返回的清理函数,退订后推送不再触达组件
-  mountCleanup()
-  assert.equal(listeners.size, 0, '卸载清理应退订')
-  snapshot = { 'next-step': [INBOX_MESSAGE] }
-  listeners.forEach((fn) => fn())
-  render({})
-  assert.equal(renders.at(-1), null, '退订后推送不再驱动渲染')
+  const documentStub = {
+    head: { appendChild: () => {} },
+    body: { appendChild: () => {} },
+    documentElement: {},
+    createElement: () => makeButton(),
+    createElementNS: () => ({ setAttribute() {}, appendChild() {} }),
+    querySelectorAll(sel) {
+      if (sel.includes('data-chat-flow-kind="steering"')) return [bubble]
+      if (sel.includes('data-cx-steer-recall')) return currentRecall() ? [currentRecall()] : []
+      return []
+    },
+  }
+  class MutationObserverStub {
+    constructor() {}
+    observe() {}
+    disconnect() {}
+  }
+  const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
+  const requireStub = (name) => {
+    if (name === '@mzzsfy/dsh-toast/client') return { show: (text, opts) => toastCalls.push({ text, opts }) }
+    return reactStub
+  }
+  const factory = new Function('window', 'require', 'document', 'MutationObserver', 'fetch', CLIENT_SRC + '\n;return null')
+  factory(
+    windowStub,
+    requireStub,
+    documentStub,
+    MutationObserverStub,
+    async () => ({ ok: false, status: 404, json: async () => ({}) }),
+  )
+  const mod = modules[0].factory(requireStub)
+  const sessions = { binding: () => undefined, fork: () => Promise.resolve('c'), open: () => {} }
+  const ctx = {
+    get: (name) => (name === 'sessions' ? sessions : {}),
+    effect: () => {},
+    slots: {
+      inject: (name, register) => register(),
+      register: (options, component) => registered.push({ options, component }),
+    },
+    get remote() { return { session: {} } },
+  }
+  mod.apply(ctx)
+  const entry = registered.find((item) => item.options.id === 'context-manager-steer')
+  assert.ok(entry, 'scan 行为测试未捕获插话撤回条目')
+  const face = {
+    getSnapshot: () => ({ 'next-step': typeof faceRows === 'function' ? faceRows() : faceRows }),
+    subscribe(cb) { subscribers.push(cb); return () => { unsubscribed = true } },
+  }
+  const useSession = (selector) => selector({ subagent: null })
+  const lastProps = {
+    useSession,
+    inputActions: { setDraft: setDraft || (() => {}) },
+    updateQueue: updateQueue || (async () => ({ ok: true })),
+    inboxFace: face,
+  }
+  entry.component(lastProps)
+  let cleanup
+  effects.forEach(({ fn }) => { cleanup = fn() })
+  if (process.env.CX_DEBUG) console.error('[cx-debug]', JSON.stringify({ effectCount: effects.length, injected: injected.length, subscribers: subscribers.length, snapshotRows: face.getSnapshot()['next-step'], toastCalls: toastCalls.length }))
+  return {
+    face,
+    injected,
+    subscribers,
+    toastCalls,
+    deps: effects[1] ? effects[1].deps : null,
+    cleanup,
+    isUnsubscribed: () => unsubscribed,
+    setEnabled: (v) => { enabledSlot = v },
+    // 模拟 React 重渲染:同一 props 再调一次组件(hooks 桩按调用序推进,游标归零)
+    rerender: () => { refCall = 0; entry.component(lastProps) },
+  }
+}
+
+const settle = () => new Promise((resolve) => setImmediate(resolve))
+
+test('scan 投影驱动:行在注入,行不在不注入;scan effect 依赖 inboxFace', () => {
+  const on = mountScanHarness({ faceRows: [INBOX_MESSAGE] })
+  assert.equal(on.injected.length, 1, '未应用行应注入撤回按钮')
+  assert.ok(on.deps && on.deps.includes(on.face), 'scan 装配 effect 应依赖 inboxFace(会话切换重订)')
+  const off = mountScanHarness({ faceRows: [] })
+  assert.equal(off.injected.length, 0, '已应用行(投影无行)不应注入按钮')
 })
 
-// 数据面契约(源码级守卫):撤回入口由 inbox 投影驱动,禁止再依赖官方气泡 DOM——
-// 0.2.0-rc.2 实测气泡落账(user/message 事件)常迟于投影 spliced 且几乎同步于应用
-// claim,按气泡注入按钮的窗口结构性趋零(本次为撤回入口第二次失效的形态结论)
-test('SteerRecallDock 数据面契约:订阅 inbox face,不依赖官方气泡 DOM', () => {
-  assert.ok(CLIENT_SRC.includes('inboxFace.subscribe'), '应订阅 inbox 投影 face 变更')
-  assert.ok(CLIENT_SRC.includes('inboxFace.getSnapshot'), '应经 face 快照读取行集')
-  assert.ok(CLIENT_SRC.includes("faceOf(INBOX_STEER_KEY)"), 'inject 应取 inbox 投影 face')
-  assert.ok(CLIENT_SRC.includes('INBOX_STEER_QUEUE'), '行集键应走常量')
-  assert.ok(!CLIENT_SRC.includes('data-pending-steering'), '不得依赖旧 pending 属性(仅落账前乐观态渲染,且无 id 不可撤)')
-  assert.ok(!CLIENT_SRC.includes('data-chat-flow-kind="steering"'), '不得依赖官方 steering 流标记(落账≈claim,窗口趋零)')
-  assert.ok(!CLIENT_SRC.includes('data-cx-steer-recall'), '撤回按钮不再注入官方气泡 DOM')
-  // SteerRecallDock 组件体内不得有 MutationObserver(fork/history 的观察器不在此列)
-  const DOCK_START = CLIENT_SRC.indexOf('function SteerRecallDock(')
-  const DOCK_END = CLIENT_SRC.indexOf('function ForkDockWithBootstrap')
-  assert.ok(DOCK_START > 0 && DOCK_END > DOCK_START, 'SteerRecallDock 切片定位失败')
-  assert.ok(!CLIENT_SRC.slice(DOCK_START, DOCK_END).includes('MutationObserver'), '撤回入口由投影订阅驱动,不得依赖 DOM 观察')
+test('scan 投影驱动:注入后被应用(行移除)→ 订阅回调摘除按钮,不重复注入', () => {
+  let rows = [INBOX_MESSAGE]
+  const h = mountScanHarness({ faceRows: () => rows })
+  assert.equal(h.injected.length, 1)
+  rows = []
+  h.subscribers.forEach((cb) => cb())
+  assert.equal(h.injected[0].removed, true, '应用后按钮应被投影重扫摘除')
+  assert.equal(h.injected.length, 1, '摘除后不得重复注入')
+})
+
+test('scan 投影驱动:行仍在的重扫防重', () => {
+  const h = mountScanHarness({ faceRows: [INBOX_MESSAGE] })
+  h.subscribers.forEach((cb) => cb())
+  assert.equal(h.injected.length, 1, '投影更新但行仍在时不应重复注入')
+})
+
+test('scan 点击:撤回主路径 remove + 回填 + 成功提示', async () => {
+  const calls = []
+  const h = mountScanHarness({
+    faceRows: [INBOX_MESSAGE],
+    updateQueue: async (itemId, action) => { calls.push({ itemId, action }); return { ok: true } },
+    setDraft: (text) => calls.push({ setDraft: text }),
+  })
+  h.injected[0].listeners.click()
+  await settle()
+  assert.deepEqual(calls, [
+    { itemId: 'm1', action: { kind: 'remove' } },
+    { setDraft: '帮我看下' },
+  ], '撤回应按 remove 动作路由并回填草稿')
+  assert.equal(h.toastCalls.at(-1).text, '已撤回到输入框')
+})
+
+test('scan 点击:点击瞬间行已被应用 → 降级提示,不回填', async () => {
+  let rows = [INBOX_MESSAGE]
+  const h = mountScanHarness({ faceRows: () => rows })
+  rows = []
+  h.injected[0].listeners.click()
+  await settle()
+  assert.deepEqual(h.toastCalls, [{ text: '插话已被应用,无法撤回', opts: { kind: 'error' } }])
+})
+
+test('scan cleanup:退订投影并移除全部已注入按钮', () => {
+  const h = mountScanHarness({ faceRows: [INBOX_MESSAGE] })
+  h.cleanup()
+  assert.equal(h.isUnsubscribed(), true, 'cleanup 应退订投影')
+  assert.equal(h.injected[0].removed, true, 'cleanup 应移除已注入按钮')
+})
+
+test('scan 点击:含附件行(非纯文本块)→ 明确提示不可撤回,不触碰队列', async () => {
+  const calls = []
+  const h = mountScanHarness({
+    faceRows: [{ id: 'm1', source: { kind: 'user' }, content: [{ type: 'text', text: '看图' }, { type: 'image', attachment: {} }] }],
+    updateQueue: async (itemId, action) => { calls.push({ itemId, action }); return { ok: true } },
+    setDraft: (text) => calls.push({ setDraft: text }),
+  })
+  h.injected[0].listeners.click()
+  await settle()
+  assert.deepEqual(calls, [], '含附件行不得发起 remove')
+  assert.deepEqual(h.toastCalls, [{ text: '含附件的插话不支持撤回', opts: { kind: 'error' } }])
+})
+
+test('scan 停用:开关关闭后重扫移除已注入按钮且不再注入', () => {
+  const h = mountScanHarness({ faceRows: [INBOX_MESSAGE] })
+  assert.equal(h.injected.length, 1, '前置:启用态已注入')
+  // 真实 React:setEnabled → 重渲染同步 enabledRef → effect 重跑。桩环境按此序驱动
+  h.setEnabled(false)
+  h.rerender()
+  h.subscribers.forEach((cb) => cb())
+  assert.equal(h.injected[0].removed, true, '停用重扫应移除已注入按钮')
+  assert.equal(h.injected.length, 1, '停用后不得重新注入')
 })

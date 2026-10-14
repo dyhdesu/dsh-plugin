@@ -144,22 +144,9 @@ const CSS = [
   '.cx-hist__banner { padding:7px 14px; flex:none; text-align:center; font:var(--dsw-font-xxs-12, 12px/18px sans-serif);',
   '  color:light-dark(rgba(15,17,21,.55), rgba(232,234,237,.55));',
   '  background:light-dark(rgba(15,17,21,.04), rgba(255,255,255,.06)); }',
-  // 插话撤回撤回行:投影驱动的自绘行(inbox face 订阅),dock 可见非零占位;
-  // fork 仍为 DOM 注入形态,dock 本体零 DOM 仅承载注入逻辑
-  '.cx-steer { display:flex; flex-direction:column; gap:4px; padding:2px 0; }',
-  '.cx-steer__row { display:flex; }',
-  '.cx-steer__btn { appearance:none; display:flex; align-items:center; gap:6px; width:100%;',
-  '  border:1px solid light-dark(rgba(15,17,21,.1), rgba(255,255,255,.14)); border-radius:8px;',
-  '  padding:5px 10px; cursor:pointer; text-align:left;',
-  '  background:light-dark(rgba(15,17,21,.03), rgba(255,255,255,.05));',
-  '  color:light-dark(rgba(15,17,21,.75), rgba(232,234,237,.75));',
-  '  font:var(--dsw-font-s-14, 14px/22px sans-serif); }',
-  '.cx-steer__btn:hover:not(:disabled) { border-color:#1677ff; color:#1677ff;',
-  '  background:light-dark(rgba(22,119,255,.06), rgba(22,119,255,.12)); }',
-  '.cx-steer__btn:disabled { cursor:default; opacity:.5; }',
-  '.cx-steer__btn:focus-visible { outline:2px solid #1677ff; outline-offset:1px; }',
-  '.cx-steer__text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }',
-  '.cx-steer__btn svg { flex:none; width:16px; height:16px; }',
+  // 插话撤回 dock:DOM 注入形态(steering 气泡操作排克隆官方按钮类),本体零占位;
+  // 按钮样式全部来自克隆的官方 action 类,无自有样式
+  '.cx-steer-host { display:none; }',
   '.cx-fork-host { display:none; }',
   // 标题栏复制 sessionId:与官方 icon 按钮同尺寸,默认隐藏(opacity 保占位,
   // 隐形盒自身仍可悬停/聚焦),悬停标题栏任一位置或按钮自身/键盘聚焦时显示;
@@ -831,20 +818,29 @@ async function withdrawSteer(row, actions) {
   return true
 }
 
-// 撤回图标 svg(undo 弯箭头):React 元素形态(dock 为 React 组件,DOM 节点作为
-// children 会触发 React error #31),stroke 继承 currentColor,尺寸由 CSS 控制
+// 撤回图标 svg(undo 弯箭头):DOM 形态(注入按钮走 DOM 路径,与 forkSvg 同构),
+// stroke 继承按钮色,尺寸 width/height 与官方操作排图标一致
 function steerRecallSvg() {
-  return h('svg', {
-    viewBox: '0 0 16 16',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: '1.5',
-    strokeLinecap: 'round',
-    strokeLinejoin: 'round',
-    'aria-hidden': 'true',
-  },
-    h('path', { d: 'M3 6.5h6.5a3.5 3.5 0 0 1 0 7H6' }),
-    h('path', { d: 'M6 3.5 3 6.5l3 3' }))
+  const namespace = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(namespace, 'svg')
+  svg.setAttribute('width', '16')
+  svg.setAttribute('height', '16')
+  svg.setAttribute('viewBox', '0 0 16 16')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  svg.setAttribute('aria-hidden', 'true')
+  const strokePath = (d) => {
+    const path = document.createElementNS(namespace, 'path')
+    path.setAttribute('d', d)
+    path.setAttribute('stroke', 'currentColor')
+    path.setAttribute('stroke-width', '1.5')
+    path.setAttribute('stroke-linecap', 'round')
+    path.setAttribute('stroke-linejoin', 'round')
+    svg.appendChild(path)
+  }
+  strokePath('M3 6.5h6.5a3.5 3.5 0 0 1 0 7H6')
+  strokePath('M6 3.5 3 6.5l3 3')
+  return svg
 }
 
 // fork 图标 svg:与官方分支按钮(IconBranchOutline16)同源,fill 细路径形态;
@@ -869,9 +865,16 @@ function forkSvg() {
 
 // fork 注入按钮标记:识别自家节点与官方按钮,防止重复注入与误删官方节点
 const FORK_BTN_FLAG = 'data-cx-fork'
+// 撤回注入按钮标记:语义同 FORK_BTN_FLAG,作用于 steering 气泡操作排
+const STEER_BTN_FLAG = 'data-cx-steer-recall'
 // 宿主消息气泡操作图标排的 CSS module 类名后缀(哈希前缀随构建漂移,后缀稳定),
 // fork 注入按它定位官方按钮排
 const BUBBLE_ACTIONS_SUFFIX = '[class$="_actions"]'
+// 气泡 node-key 的 messageId 提取:形如 {seq}:input-message{messageId},
+// 后缀与 inbox next-step 投影行 id 同源(官方两侧同用 String(event.data.id))
+const STEER_NODE_KEY_RE = /input-message(.+)$/
+// 气泡 node-key 属性名(与 TURN_ATTR/FLOW_KIND_ATTR 同族的官方流标记)
+const NODE_KEY_ATTR = 'data-chat-node-key'
 // 宿主 inbox 投影:未应用插话驻留的队列键(dsh 0.2.0 语义)
 const INBOX_STEER_KEY = 'inbox'
 const INBOX_STEER_QUEUE = 'next-step'
@@ -905,65 +908,114 @@ async function followOpening(remote, sessionId) {
   return []
 }
 
-// 插话撤回:未应用插话的撤回行,由 inbox 投影数据面驱动(订阅 face 实时增删),
-// 不依赖官方气泡 DOM——rc.2 实测气泡落账几乎同步于应用 claim,按气泡注入的窗口
-// 结构性趋零(撤回入口第二次失效的形态结论:入口必须跟投影走)。行在投影即显示,
-// 被应用/摘除即消失;落账前乐观态行未入投影,宿主无撤回通道,不在覆盖范围。
-// face 缺失(旧宿主)整体不渲染,干净禁用。
+// 插话撤回:未应用插话气泡(消息流 steering 项,永久驻留)的操作排注入撤回图标,
+// 与 fork 注入同机制。显隐由 inbox 投影行集驱动(行在=未应用):scan 时行在注入、
+// 行不在摘除,投影订阅驱动重扫,应用后按钮即时消失;点击与投影更新之间的竞态窗口
+// 由「行不在降级提示 / remove 失败提示」兜底(旧'行消失即摘按钮'的实时性由订阅保证)。
 function SteerRecallDock({ useSession, inputActions, updateQueue, inboxFace }) {
   const queueMutable = useSession((state) => state.subagent === null || state.subagent.address.mode === 'continuable')
-  const [busy, setBusy] = useState(false)
-  // 启停开关(设置页):挂载拉取一次,停用即整体不渲染;失败按启用兜底
+  // 启停开关(设置页):挂载拉取一次,停用即移除已注入按钮并不再注入;失败按启用兜底
   const [enabled, setEnabled] = useState(true)
-  const [rows, setRows] = useState([])
-  // face 校验:行集仅对当前 face 有效,face 变更(会话切换)的渲染帧先按空渲染,
-  // 防旧会话行闪现在新会话输入框上方(点到的 row.id 属旧会话,必败)
-  const faceRef = useRef(null)
-  const rowsKeyRef = useRef('')
-  const rowsForFace = faceRef.current === inboxFace ? rows : []
-  faceRef.current = inboxFace
   useEffect(() => {
     api(STEER_ENABLED_URL)
       .then((payload) => setEnabled(payload ? payload.enabled !== false : true))
       .catch(() => {})
   }, [])
-  // 投影订阅:face 引用来自宿主投影缓存,跨渲染稳定;缺 getSnapshot(形态漂移)
-  // 即不订阅保持空行集,缺 subscribe(旧宿主)退化为挂载时一次拉取
+  // 条件 return 之前同步全部依赖:scan 门控与点击处理器都要看到最新值(会话切换
+  // 后旧 face 的快照不得继续服务新 DOM,与 ForkDock 的 ref 同步纪律同构)
+  const depsRef = useRef(null)
+  const enabledRef = useRef(true)
+  depsRef.current = { queueMutable, inputActions, updateQueue, inboxFace }
+  enabledRef.current = enabled
   useEffect(() => {
-    if (!inboxFace || typeof inboxFace.getSnapshot !== 'function') return
-    const refresh = () => {
-      const next = steerRowsOfInbox(inboxFace.getSnapshot() && inboxFace.getSnapshot()[INBOX_STEER_QUEUE])
-      // 同值短路:通知不区分队列键,next-turn 等无关变动不打扰渲染
-      const key = next.map((row) => row.id).join('\n')
-      if (key === rowsKeyRef.current) return
-      rowsKeyRef.current = key
-      setRows(next)
+    function removeAll() {
+      document.querySelectorAll('[' + STEER_BTN_FLAG + ']').forEach((button) => button.remove())
     }
-    refresh()
-    return typeof inboxFace.subscribe === 'function' ? inboxFace.subscribe(refresh) : undefined
-  }, [inboxFace])
+    function scan() {
+      if (!enabledRef.current) {
+        removeAll()
+        return
+      }
+      const deps = depsRef.current
+      if (!deps || !deps.queueMutable || !deps.inboxFace || typeof deps.inboxFace.getSnapshot !== 'function') {
+        // 锁定态(subagent prompt)与停用同构:无可撤语义,残留图标一律摘除
+        // (解锁时宿主输入区复挂触发 mutation → scan 重注入,收敛无死角)
+        removeAll()
+        return
+      }
+      const snapshot = deps.inboxFace.getSnapshot()
+      const rows = steerRowsOfInbox(snapshot && snapshot[INBOX_STEER_QUEUE])
+      const bubbles = document.querySelectorAll('[' + FLOW_KIND_ATTR + '="steering"]')
+      bubbles.forEach((bubble) => {
+        // node-key 形如 {seq}:input-message{messageId};无 node-key 的气泡点击无从
+        // 匹配投影行,不注入(具体 id 点击时实时重读,防节点复用后过期)
+        const match = STEER_NODE_KEY_RE.exec(bubble.getAttribute(NODE_KEY_ATTR) || '')
+        if (!match) return
+        // 显隐由投影行集驱动:行在=未应用才注入;行不在=已应用/已撤回,摘除残留按钮
+        const existing = bubble.querySelector('[' + STEER_BTN_FLAG + ']')
+        if (!rows.some((item) => item.id === match[1])) {
+          if (existing) existing.remove()
+          return
+        }
+        if (existing) return
+        const actionsRow = bubble.querySelector(BUBBLE_ACTIONS_SUFFIX)
+        if (!actionsRow) return
+        const official = actionsRow.querySelector('button:not([' + STEER_BTN_FLAG + '])')
+        if (!official) return
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.setAttribute(STEER_BTN_FLAG, '')
+        // 克隆官方按钮类名:尺寸/hover/悬停显隐(reveal)全部原生
+        button.className = official.className
+        button.title = '撤回该插话:原文填回输入框重新编辑;插话被应用后无法撤回'
+        button.addEventListener('click', () => {
+          // 与 scan 同款依赖守卫:渲染停用后残留按钮的点击不得继续(face 为 null
+          // 会 TypeError,queueMutable=false 时 updateQueue/回填目标均不可用);
+          // messageId 点击时实时重读——React 复用气泡 DOM 更新 node-key 后,
+          // 注入瞬间固化的 id 会指向已不在此气泡的消息
+          const current = depsRef.current
+          if (!current || !current.queueMutable || !current.inboxFace || typeof current.inboxFace.getSnapshot !== 'function') return
+          const node = button.closest('[' + FLOW_KIND_ATTR + '="steering"]')
+          const match = node && STEER_NODE_KEY_RE.exec(node.getAttribute(NODE_KEY_ATTR) || '')
+          if (!match) return
+          const snapshot = current.inboxFace.getSnapshot()
+          const row = steerRowsOfInbox(snapshot && snapshot[INBOX_STEER_QUEUE]).find((item) => item.id === match[1])
+          if (!row) {
+            toast('插话已被应用,无法撤回', { kind: 'error' })
+            return
+          }
+          if (row.text === null) {
+            toast('含附件的插话不支持撤回', { kind: 'error' })
+            return
+          }
+          button.disabled = true
+          void withdrawSteer(row, { updateQueue: current.updateQueue, setDraft: current.inputActions.setDraft, notify: toast })
+            .finally(() => { button.disabled = false })
+        })
+        button.appendChild(steerRecallSvg())
+        actionsRow.appendChild(button)
+      })
+    }
+    if (typeof MutationObserver === 'undefined' || typeof document.querySelectorAll !== 'function') return undefined
+    const scanRef = { current: scan }
+    const observer = new MutationObserver(() => { if (scanRef.current) scanRef.current() })
+    observer.observe(document.documentElement, { childList: true, subtree: true })
+    // 投影订阅:应用/撤回改变 next-step 行集时重扫,按钮显隐不依赖气泡 DOM 变化
+    const face = depsRef.current && depsRef.current.inboxFace
+    const unsubscribe = face && typeof face.subscribe === 'function'
+      ? face.subscribe(() => { if (scanRef.current) scanRef.current() })
+      : null
+    scan()
+    return () => {
+      scanRef.current = null
+      if (typeof unsubscribe === 'function') unsubscribe()
+      observer.disconnect()
+      removeAll()
+    }
+  }, [enabled, inboxFace])
   if (inputActions === undefined || updateQueue === undefined || inboxFace === undefined) return null
-  if (!enabled || !queueMutable || rowsForFace.length === 0) return null
-  return h('div', { className: 'cx-steer' },
-    rowsForFace.map((row) => {
-      const textOnly = row.text !== null
-      return h('div', { className: 'cx-steer__row', key: row.id },
-        h('button', {
-          className: 'cx-steer__btn',
-          type: 'button',
-          disabled: busy || !textOnly,
-          title: textOnly ? '撤回到输入框: ' + row.preview : '含附件的插话不可撤回',
-          onClick: () => {
-            if (busy) return
-            setBusy(true)
-            void withdrawSteer(row, { updateQueue, setDraft: inputActions.setDraft, notify: toast })
-              .finally(() => setBusy(false))
-          },
-        },
-          steerRecallSvg(),
-          h('span', { className: 'cx-steer__text' }, textOnly ? '撤回到输入框: ' + row.preview : '含附件的插话不可撤回'),
-        ))
-    }))
+  if (!enabled || !queueMutable) return null
+  return h('div', { className: 'cx-steer-host' })
 }
 
 // 对话 fork:重写式分叉——从消息气泡处分叉到该轮之前(该轮不带入子会话消息流),
@@ -1209,7 +1261,7 @@ function ForkDock({ session, forkSession, cancelSession, turnEnds, refreshRef })
 // 裁剪,JS 定位复杂度不成比例);文案与功能行为同源维护,由源码契约测试锁定
 const HISTORY_SWITCH_TITLE = '在输入框按 Alt+↑ 唤起历史输入浮层,浏览并回填历史输入;浮层内 ←/→ 切换范围,点击顶栏范围标签展开选择(常用 / 当前会话 / 本工作区 / 全部工作区),顶部搜索框过滤条目,行悬停星标可收藏常用提示词。停用后快捷键与浮层整体关闭,刷新页面生效。'
 const HISTORY_BUTTON_SWITCH_TITLE = '输入框下方工具排显示历史输入按钮,点击打开浮层,再点关闭,与 Alt+↑ 等效;停用仅隐藏按钮,快捷键与浮层不受影响;刷新页面生效。'
-const STEER_SWITCH_TITLE = '未应用插话在输入框上方显示撤回行(undo 图标 + 预览文本),点击撤回并把原文填回输入框(覆盖输入框现有草稿);含附件的插话不可撤回;行被应用/摘除即消失;停用即整体不渲染,刷新页面生效。'
+const STEER_SWITCH_TITLE = '未应用插话气泡的操作排显示撤回图标(与复制按钮同排),点击撤回并把原文填回输入框(覆盖输入框现有草稿);插话被应用后图标随队列投影摘除;点击瞬间恰好被应用的仅提示不可撤回;含附件的插话不支持撤回;停用即移除已注入图标,刷新页面生效。'
 const FORK_SWITCH_TITLE = '消息气泡操作排显示分叉按钮,点击分叉出新会话到该轮之前(该轮不带入子会话),该轮的用户输入自动回填子会话输入框供编辑重发,子会话自动打开且标题尾号递增;进行中的轮(回复尚未完成)同样可分叉,分叉后自动停止本会话该轮未完成的回复;首轮(无更早上下文可继承,新建会话即为同义操作)与无文本输入的轮(纯图等,无从重发)不注入;停用即不再注入,刷新页面生效。'
 const FORK_AUTO_RESEND_SWITCH_TITLE = '分叉成功后自动把该轮原输入发送到子会话立即开跑(重生成语义,相当于原输入重跑一遍);关闭时分叉仅把原输入回填子会话输入框,由你编辑后再手动发送。'
 const COPY_SID_SWITCH_TITLE = '会话标题栏显示复制 sessionId 按钮,平时隐藏,鼠标移到标题栏任意位置时显示,点击复制当前会话 id 到剪贴板(便于粘贴给他人排查或脚本引用);关闭后按钮整体不渲染,刷新页面生效。'

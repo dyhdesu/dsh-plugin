@@ -878,6 +878,8 @@ const NODE_KEY_ATTR = 'data-chat-node-key'
 // Host optimistic pending steering bubble 标记(dsh-client-ui-chat PendingSteeringBubble,
 // 插话发送后的第一阶段气泡,无 flow-kind/node-key;消费后转 durable steering 节点)
 const STEER_PENDING_ATTR = 'data-pending-steering'
+// 本地提交 echo 标记(PendingSubmissionBubble,Host 未确认的暂存气泡,无对应投影行)
+const SUBMISSION_ECHO_ATTR = 'data-submission-echo'
 // 宿主 inbox 投影:未应用插话驻留的队列键(dsh 0.2.0 语义)
 const INBOX_STEER_KEY = 'inbox'
 const INBOX_STEER_QUEUE = 'next-step'
@@ -949,30 +951,7 @@ function SteerRecallDock({ useSession, inputActions, updateQueue, inboxFace }) {
       const snapshot = deps.inboxFace.getSnapshot()
       const rows = steerRowsOfInbox(snapshot && snapshot[INBOX_STEER_QUEUE])
       const rowsById = new Map(rows.map((item) => [String(item.id), item]))
-      // 两类可见气泡:durable steering(flow wrapper 带 node-key)与 Host optimistic
-      // pending(data-pending-steering 根节点,无任何 key)。pending 是插话发送后的
-      // 第一阶段,durable 是其消费后的转录形态;两阶段都必须可见可撤
-      const bubbles = document.querySelectorAll(
-        '[' + FLOW_KIND_ATTR + '="steering"], [' + STEER_PENDING_ATTR + ']',
-      )
-      const consumed = new Set()
-      bubbles.forEach((bubble) => {
-        const existing = bubble.querySelector('[' + STEER_BTN_FLAG + ']')
-        const nodeKey = bubble.getAttribute(NODE_KEY_ATTR) || ''
-        const match = STEER_NODE_KEY_RE.exec(nodeKey)
-        let row = match ? rowsById.get(match[1]) : null
-        // pending 气泡无 messageId:以渲染文本对齐投影行(去重消费,同文取首条);
-        // Markdown 渲染导致文本不一致时匹配失败 = 不注入,降级到 durable 阶段,安全方向
-        if (!row && bubble.hasAttribute(STEER_PENDING_ATTR)) {
-          const visible = (bubble.textContent || '').trim()
-          row = rows.find((item) => !consumed.has(String(item.id)) && item.text !== null && item.text.trim() === visible) || null
-        }
-        if (!row) {
-          if (existing) existing.remove()
-          return
-        }
-        consumed.add(String(row.id))
-        if (existing) return
+      const injectRecall = (bubble) => {
         const actionsRow = bubble.querySelector(BUBBLE_ACTIONS_SUFFIX)
         if (!actionsRow) return
         const official = actionsRow.querySelector('button:not([' + STEER_BTN_FLAG + '])')
@@ -986,22 +965,27 @@ function SteerRecallDock({ useSession, inputActions, updateQueue, inboxFace }) {
         button.addEventListener('click', () => {
           // 与 scan 同款依赖守卫:渲染停用后残留按钮的点击不得继续(face 为 null
           // 会 TypeError,queueMutable=false 时 updateQueue/回填目标均不可用);
-          // messageId 点击时实时重读——React 复用气泡 DOM 更新 node-key 后,
-          // 注入瞬间固化的 id 会指向已不在此气泡的消息
+          // 行归属点击时实时重读——React 复用气泡 DOM 更新 node-key/序列后,
+          // 注入瞬间固化的行会指向已不在此气泡的消息
           const current = depsRef.current
           if (!current || !current.queueMutable || !current.inboxFace || typeof current.inboxFace.getSnapshot !== 'function') return
           const node = button.closest('[' + FLOW_KIND_ATTR + '="steering"], [' + STEER_PENDING_ATTR + ']')
           if (!node) return
-          const nodeMatch = STEER_NODE_KEY_RE.exec(node.getAttribute(NODE_KEY_ATTR) || '')
           const currentSnapshot = current.inboxFace.getSnapshot()
           const currentRows = steerRowsOfInbox(currentSnapshot && currentSnapshot[INBOX_STEER_QUEUE])
-          // 点击重读行:durable 按 messageId;pending 无 key,按渲染文本回退
-          // (与 scan 同向,文本不一致时降级提示,绝不误撤)
-          const currentRow = nodeMatch
-            ? currentRows.find((item) => String(item.id) === nodeMatch[1])
-            : node.hasAttribute(STEER_PENDING_ATTR)
-              ? currentRows.find((item) => item.text !== null && item.text.trim() === (node.textContent || '').trim())
-              : null
+          // 点击重读行:durable 按 messageId;pending 按文档序对齐(与 scan 同构)
+          const nodeMatch = STEER_NODE_KEY_RE.exec(node.getAttribute(NODE_KEY_ATTR) || '')
+          let currentRow = null
+          if (nodeMatch) {
+            currentRow = currentRows.find((item) => String(item.id) === nodeMatch[1]) || null
+          } else if (node.hasAttribute(STEER_PENDING_ATTR) && !node.hasAttribute(SUBMISSION_ECHO_ATTR)) {
+            const pendingList = Array.prototype.filter.call(
+              document.querySelectorAll('[' + STEER_PENDING_ATTR + ']'),
+              (item) => !item.hasAttribute(SUBMISSION_ECHO_ATTR),
+            )
+            const seq = Array.prototype.indexOf.call(pendingList, node)
+            currentRow = seq >= 0 ? (currentRows[seq] || null) : null
+          }
           if (!currentRow) {
             toast('插话已被应用,无法撤回', { kind: 'error' })
             return
@@ -1016,6 +1000,36 @@ function SteerRecallDock({ useSession, inputActions, updateQueue, inboxFace }) {
         })
         button.appendChild(steerRecallSvg())
         actionsRow.appendChild(button)
+      }
+      // durable:flow wrapper 带 node-key,按 messageId 匹配投影行
+      document.querySelectorAll('[' + FLOW_KIND_ATTR + '="steering"]').forEach((bubble) => {
+        const existing = bubble.querySelector('[' + STEER_BTN_FLAG + ']')
+        const match = STEER_NODE_KEY_RE.exec(bubble.getAttribute(NODE_KEY_ATTR) || '')
+        const row = match ? rowsById.get(match[1]) : null
+        if (!row) {
+          if (existing) existing.remove()
+          return
+        }
+        if (existing) return
+        injectRecall(bubble)
+      })
+      // pending:Host-authoritative optimistic 气泡与 next-step user 行同源保序渲染
+      // (宿主 pendingInputs 即 next-step user 行 flatMap),按文档序与投影序一一
+      // 配对;渲染文本不参与匹配(Markdown 插话的 textContent 与原文必不一致)。
+      // 本地 echo(Host 未确认,无对应行)排除
+      const pendingList = Array.prototype.filter.call(
+        document.querySelectorAll('[' + STEER_PENDING_ATTR + ']'),
+        (bubble) => !bubble.hasAttribute(SUBMISSION_ECHO_ATTR),
+      )
+      pendingList.forEach((bubble, index) => {
+        const existing = bubble.querySelector('[' + STEER_BTN_FLAG + ']')
+        const row = rows[index] || null
+        if (!row) {
+          if (existing) existing.remove()
+          return
+        }
+        if (existing) return
+        injectRecall(bubble)
       })
     }
     if (typeof MutationObserver === 'undefined' || typeof document.querySelectorAll !== 'function') return undefined

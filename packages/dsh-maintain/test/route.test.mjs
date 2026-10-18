@@ -501,7 +501,7 @@ test('upgrade:terminals 面不可见属宿主常态,agents 计数照常门控', 
   // 活跃 agent 由 agents 计数覆盖,不得因此降级为"检测不可用"
   const noTerminalFace = makeCtx({
     appExit: () => {},
-    services: { agents: { list: () => [{ id: 'a-live', status: 'running' }] }, jobs: { list: () => [] } },
+    services: { agents: { list: () => [{ id: 'a-live', status: 'running', ctx: { get: () => undefined } }] }, jobs: { list: () => [] } },
     dependencies: DEPS({ runManagedUpgrade: runner }),
   })
   const denied = await post(noTerminalFace.routes, '/api/maintain/upgrade', { targetVersion: '2.0.0' })
@@ -518,6 +518,21 @@ test('upgrade:terminals 面不可见属宿主常态,agents 计数照常门控', 
   const accepted = await post(idle.routes, '/api/maintain/upgrade', { targetVersion: '2.0.0' })
   assert.equal(accepted.status, 200, 'terminals 面不可见且无活跃工作时必须放行')
   await drainMicrotasks()
+})
+
+test('upgrade:terminals 面可见但方法面残缺仍降级(残余 fail-closed 路径)', async () => {
+  const runner = makeRunnerStub()
+  const brokenFace = makeCtx({
+    appExit: () => {},
+    services: { agents: { list: () => [] }, jobs: { list: () => [] }, terminals: {} },
+    dependencies: DEPS({ runManagedUpgrade: runner }),
+  })
+  const denied = await post(brokenFace.routes, '/api/maintain/upgrade', { targetVersion: '2.0.0' })
+  assert.equal(denied.status, 409)
+  assert.match(denied.payload.error, /检测不可用/, '面可见但残缺属真缺陷,保持 fail-closed')
+  assert.equal(denied.payload.detectionAvailable, false)
+  await drainMicrotasks()
+  assert.equal(runner.calls.length, 0, '检测降级路径不得进入 runner')
 })
 
 test('upgrade:runner 成功调度一次正常退出', async (t) => {

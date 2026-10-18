@@ -134,7 +134,8 @@ export function collectActiveWork(ctx) {
       degrade('terminals', '根探测异常: ' + (error && error.message ? error.message : String(error)))
     }
     // 0.2.0 实测:terminals 服务对插件 ctx 根与 agent realm 均不可探,面不可见属宿主常态
-    // 不计降级;终端归属 agent,活跃 agent 已由 agents 计数覆盖,服务面可见时(测试桩/未来宿主)照常计数
+    // 不计降级;agents 计数覆盖 running 期间的终端活动,agent 转 idle 后存活终端属已知盲区;
+    // 服务面可见时(测试桩/未来宿主)照常计数
   } catch (error) {
     degrade('terminals', error && error.message ? error.message : String(error))
   }

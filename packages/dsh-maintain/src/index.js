@@ -100,10 +100,8 @@ export function collectActiveWork(ctx) {
 
   try {
     const seen = new Set()
-    let sawTerminalsService = false
     const scan = (terminals, owner) => {
       if (!terminals) return
-      sawTerminalsService = true
       if (owner && typeof terminals.hasOwnerActivity === 'function' && terminals.hasOwnerActivity(owner)) {
         const key = 'pending:' + String(owner.id)
         if (!seen.has(key)) { seen.add(key); counts.terminals += 1 }
@@ -133,9 +131,8 @@ export function collectActiveWork(ctx) {
     } catch (error) {
       degrade('terminals', '根探测异常: ' + (error && error.message ? error.message : String(error)))
     }
-    // 服务面随 agent realm 挂载:无 agent 时不可见属常态(无对象即无终端),不计降级;
-    // 有 agent 而探不到服务面(可探性缺失或面缺失)属异常,降级留痕
-    if (!sawTerminalsService && agentList.length > 0) degrade('terminals', 'terminals 服务面不可用')
+    // 0.2.0 实测:terminals 服务对插件 ctx 根与 agent realm 均不可探,面不可见属宿主常态
+    // 不计降级;终端归属 agent,活跃 agent 已由 agents 计数覆盖,服务面可见时(测试桩/未来宿主)照常计数
   } catch (error) {
     degrade('terminals', error && error.message ? error.message : String(error))
   }

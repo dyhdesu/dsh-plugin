@@ -128,7 +128,7 @@ export function createTerminalTool({ controller, readScreen, defineTool }) {
           }
           const info = controller.list(sessionId).find((row) => row.id === args.terminal_id)
           if (!info) return invalid('TERMINAL_UNAVAILABLE', 'terminal 不在当前 Session')
-          if (info.controllerId === undefined) return invalid('NOT_ATTACHED', 'terminal 当前没有可写 attachment')
+          if (info.controllerId === undefined) return invalid('NOT_ATTACHED', 'terminal 侧边栏面板未打开(切页会断开输入附着),打开面板后重试')
           await controller.write(agent, args.terminal_id, info.controllerId, args.text + (args.submit === true ? '\r' : ''))
           return { ok: true, terminal_id: args.terminal_id, accepted: true }
         }

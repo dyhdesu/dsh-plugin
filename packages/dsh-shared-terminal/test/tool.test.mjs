@@ -96,6 +96,7 @@ test('Given attachment lost, When writing, Then it does not create a new followe
   const controller = makeController({ list() { return [{ id: 'term-a' }] } })
   const result = await makeTool(controller).execute({ action: 'write', terminal_id: 'term-a', text: 'x' }, exec)
   assert.equal(result.error.code, 'NOT_ATTACHED')
+  assert.match(result.error.message, /侧边栏面板未打开/, '错误文案须引导用户打开面板')
   assert.equal(controller.calls.length, 0)
 })
 

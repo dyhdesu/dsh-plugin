@@ -54,10 +54,10 @@ test('形态无法比较按 skip 语义放行,入口缺失包仍不入 bundles',
 
 test('真实仓库 0.1.5 基线槽过滤:四个 hostMin 包摘出,0.2.0 主测槽全量', (t) => {
   // 全仓枚举双槽对照,锁定真实 hostMin 声明(gateway 0.2.0-rc.1 / shell-select 0.1.7-rc.1 /
-  // ai-team 0.2.0-rc.1 / shared-terminal 0.2.0-rc.2)
+  // boss-simulator 0.2.0-rc.1 / shared-terminal 0.2.0-rc.2)
   const full = enumeratePackages({ hostVersion: '0.2.0-rc.2' })
   const baseline = enumeratePackages({ hostVersion: '0.1.5-rc.3' })
-  for (const name of ['dsh-shell-select', 'dsh-llm-pi-gateway', 'dsh-ai-team', 'dsh-shared-terminal']) {
+  for (const name of ['dsh-shell-select', 'dsh-llm-pi-gateway', 'dsh-boss-simulator', 'dsh-shared-terminal']) {
     assert.ok(full.bundles.includes(`@mzzsfy/${name}`), `主测槽应含 ${name}`)
     assert.ok(!baseline.bundles.includes(`@mzzsfy/${name}`), `基线槽应摘出 ${name}`)
   }

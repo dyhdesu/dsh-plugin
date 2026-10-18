@@ -146,6 +146,25 @@ test('公共依赖包带残留依赖行与 bundles 条目:一次运行联动治�
   assert.deepEqual(deps, {}, '依赖行应清空')
 })
 
+test('孤儿清理:改名/删除包的 file 残留依赖行与装载条目一并出层,registry 来源不动', (t) => {
+  const sand = sandbox(t, {
+    packages: {'pkg-a': PLUGIN_MANIFEST},
+    bundles: ['@mzzsfy/pkg-old', '@mzzsfy/pkg-a', '@mzzsfy/pkg-npm'],
+  })
+  const profileManifest = JSON.parse(readFileSync(join(sand.profile, 'package.json'), 'utf8'))
+  profileManifest.dependencies['@mzzsfy/pkg-a'] = fileSpec(sand.sandRepo, 'pkg-a')
+  profileManifest.dependencies['@mzzsfy/pkg-old'] = fileSpec(sand.sandRepo, 'pkg-old')
+  writeFileSync(join(sand.profile, 'package.json'), JSON.stringify(profileManifest))
+
+  const out = runDevLink(sand, ['all'])
+  assert.match(out, /pkg-old.*删除孤儿依赖行/, '指向仓库的孤儿依赖行应被删除')
+  assert.match(out, /孤儿装载层条目已随依赖行出层/, '孤儿装载条目应随依赖行出层')
+  assert.deepEqual(readBundles(sand), ['@mzzsfy/pkg-a', '@mzzsfy/pkg-npm'], 'registry 来源的 scope 装载条目不得误删')
+  const deps = JSON.parse(readFileSync(join(sand.profile, 'package.json'), 'utf8')).dependencies
+  assert.equal(deps['@mzzsfy/pkg-old'], undefined)
+  assert.equal(deps['@mzzsfy/pkg-a'], fileSpec(sand.sandRepo, 'pkg-a'))
+})
+
 test('all 模式:批量加入缺失插件包并移出公共依赖包残留', (t) => {
   const sand = sandbox(t, {
     packages: {'pkg-a': PLUGIN_MANIFEST, 'pkg-b': PLUGIN_MANIFEST, 'pkg-lib': LIB_MANIFEST},

@@ -306,6 +306,42 @@ function normalizeBundles(packages) {
   return true
 }
 
+/**
+ * 仓库清单孤儿清理:包目录改名/删除后,profile 残留的 file:/link: 指向本仓库 packages
+ * 的依赖行、对应装载层条目与 dangling junction 一并移除(镜像官方 reconcile"失去声明
+ * 或依赖行即出层"语义)。registry 来源的 @mzzsfy 条目(用户自装的其他包)不动。
+ */
+function pruneRepoOrphans(packages) {
+  const manifest = readProfileManifest()
+  manifest.dependencies = manifest.dependencies || {}
+  const repoKeys = new Set(packages.map((dir) => SCOPE + dir))
+  const repoMark = join(repoRoot, 'packages', '').replace(/\\/g, '/')
+  const orphanKeys = new Set()
+  let changed = false
+  for (const key of Object.keys(manifest.dependencies)) {
+    if (repoKeys.has(key) || !key.startsWith(SCOPE)) continue
+    const spec = String(manifest.dependencies[key])
+    if (!/^(file|link):/.test(spec) || !spec.includes(repoMark)) continue
+    console.log(`FIX  ${key}: 删除孤儿依赖行 ${spec}(仓库包已不存在)`)
+    delete manifest.dependencies[key]
+    orphanKeys.add(key)
+    const name = key.slice(SCOPE.length)
+    if (existsSync(junctionPath(name))) {
+      rmSync(junctionPath(name), {recursive: true, force: true})
+      console.log(`FIX  ${key}: 已移除 dangling junction`)
+    }
+    changed = true
+  }
+  if (!changed) return false
+  const plugins = [...(manifest.dsh?.profile?.bundles ?? [])]
+  // 只移除已证实为孤儿的装载条目;清单外条目(官方内盒/registry 自装)一律不动
+  const kept = plugins.filter((key) => !orphanKeys.has(key))
+  manifest.dsh = {...manifest.dsh, profile: {...manifest.dsh?.profile, bundles: kept}}
+  writeFileSync(profileManifest, JSON.stringify(manifest, null, 2) + '\n')
+  console.log('FIX  孤儿装载层条目已随依赖行出层,重启 dsh 后生效')
+  return true
+}
+
 function pnpmInstall(allowFresh) {
   const args = allowFresh ? ['install', '--config.minimum-release-age=0'] : ['install']
   console.log(`$ pnpm ${args.join(' ')}(profile 内)`)
@@ -482,12 +518,14 @@ if (!unlink) {
   const scope = target === 'all' ? packages : usable
   const normalized = normalizeDeps(scope)
   latests = normalized.latests
+  // 孤儿清理在装载层对账前执行:改名/删除包的残留行出层后,bundles 对账不再见到它们
+  const orphanChanged = pruneRepoOrphans(packages)
   // 装载层对账依赖依赖行归一结果;成员关系不改依赖图,不触发安装
   normalizeBundles(scope)
   // 豁免清单是全 profile 级策略,仅在 all 模式全量重写(只豁免各包线上最新版——
   // 历史版本早已过宽限期)
   const excludeChanged = target === 'all' ? syncReleaseAgeExclude(packages, latests) : false
-  if (normalized.changed || excludeChanged) {
+  if (normalized.changed || orphanChanged || excludeChanged) {
     if (!pnpmInstall(allowFresh)) {
       console.error('FAIL 依赖行已写入但安装失败,终态不保证;处理后同参数重跑本脚本')
       process.exitCode = 1

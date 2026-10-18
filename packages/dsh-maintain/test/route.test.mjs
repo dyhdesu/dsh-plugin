@@ -535,6 +535,22 @@ test('upgrade:terminals 面可见但方法面残缺仍降级(残余 fail-closed 
   assert.equal(runner.calls.length, 0, '检测降级路径不得进入 runner')
 })
 
+test('upgrade:agent realm 面可见但残缺仍降级(per-agent fail-closed 对称)', async () => {
+  const runner = makeRunnerStub()
+  // realm 面 get('terminals') 返回 {} 与根面残缺同构:扫描 throw → 降级,不得静默当 0 计数
+  const realmBroken = makeCtx({
+    appExit: () => {},
+    services: { agents: { list: () => [{ id: 'a-realm', status: 'idle', ctx: { get: () => ({}) } }] }, jobs: { list: () => [] } },
+    dependencies: DEPS({ runManagedUpgrade: runner }),
+  })
+  const denied = await post(realmBroken.routes, '/api/maintain/upgrade', { targetVersion: '2.0.0' })
+  assert.equal(denied.status, 409)
+  assert.match(denied.payload.error, /检测不可用/, 'realm 面可见但残缺属真缺陷,保持 fail-closed')
+  assert.equal(denied.payload.detectionAvailable, false)
+  await drainMicrotasks()
+  assert.equal(runner.calls.length, 0, '检测降级路径不得进入 runner')
+})
+
 test('upgrade:runner 成功调度一次正常退出', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const exits = []

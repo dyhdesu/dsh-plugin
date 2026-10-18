@@ -68,7 +68,7 @@ export function collectActiveWork(ctx) {
     detectionAvailable = false
     if (degradedWarned.has(key)) return
     degradedWarned.add(key)
-    console.warn('[dsh-maintain] 活跃工作检测降级,门控放行(' + key + '): ' + singleLine(detail))
+    console.warn('[dsh-maintain] 活跃工作检测降级,升级门拒绝/重启门放行(' + key + '): ' + singleLine(detail))
   }
 
   let agentList = []

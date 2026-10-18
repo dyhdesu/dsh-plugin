@@ -55,7 +55,7 @@ function tagsBody(tags) {
 
 globalThis.fetch = async () => tagsBody(MOCK_TAGS)
 
-function makeCtx({ appExit, settingsStore, settingsAvailable = true, legacySettings = false, configEditorAvailable = true, timerAvailable = true, services = {}, dependencies = {} } = {}) {
+function makeCtx({ appExit, settingsStore, settingsAvailable = true, legacySettings = false, configEditorAvailable = true, timerAvailable = true, services = {}, dependencies = {}, installAnchor = TEST_RUNTIME_MANIFEST, hostVersionProbeAvailable = true } = {}) {
   const routes = new Map()
   let tick = null
   // 条目配置桩:settingsStore 对象即 apply 入参 config(0.1.7 形态的宿主解析配置);
@@ -92,10 +92,10 @@ function makeCtx({ appExit, settingsStore, settingsAvailable = true, legacySetti
     calls,
     // fiber 桩:0.1.7 写路径经 fiber.entry 定位 profile 条目
     fiber: { entry: { options: { id: 'maintain', name: '@mzzsfy/dsh-maintain' } } },
-    profileContext: { installAnchor: TEST_RUNTIME_MANIFEST, name: 'web', dir: 'test-profile', home: 'test-home' },
+    profileContext: installAnchor === null ? {} : { installAnchor, name: 'web', dir: 'test-profile', home: 'test-home' },
     hooks,
     get(name) {
-      if (name === 'hostVersionProbe') return services.hostVersionProbe || (() => '1.0.0')
+      if (name === 'hostVersionProbe') return hostVersionProbeAvailable ? services.hostVersionProbe || (() => '1.0.0') : undefined
       if (name === 'hooks') return services.agentHooks || hooks
       if (name === 'appExit') return appExit
       if (name === 'settings') return settingsAvailable ? settingsService : undefined
@@ -186,6 +186,29 @@ const realSleep = (ms) => new Promise((resolve) => {
   const start = Date.now()
   const spin = () => { if (Date.now() - start >= ms) resolve(); else setImmediate(spin) }
   setImmediate(spin)
+})
+
+test('缺失宿主安装锚点时插件仍挂载并以未知版本提供状态', async () => {
+  const { routes } = makeCtx({ installAnchor: 'C:/missing-maintain-runtime/package.json', hostVersionProbeAvailable: false })
+  assert.ok(await waitSnapshotReady(routes))
+  const status = await get(routes, '/api/maintain/status')
+  assert.equal(status.status, 200)
+  assert.equal(status.payload.runningVersion, null)
+})
+
+test('宿主清单损坏时插件仍挂载并以未知版本提供状态', async t => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const root = await mkdtemp(join(tmpdir(), 'maintain-bad-manifest-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const manifest = join(root, 'package.json')
+  await writeFile(manifest, '{')
+  const { routes } = makeCtx({ installAnchor: manifest, hostVersionProbeAvailable: false })
+  assert.ok(await waitSnapshotReady(routes))
+  const status = await get(routes, '/api/maintain/status')
+  assert.equal(status.status, 200)
+  assert.equal(status.payload.runningVersion, null)
 })
 
 test('挂载:8 条路由注册,启动检查后快照就绪', async () => {

@@ -13,6 +13,16 @@ async function optionalStat(path) {
   }
 }
 
+async function linkMatches(layout, target) {
+  try {
+    const info = await optionalStat(layout.link)
+    return Boolean(target && info?.isSymbolicLink() && samePath(await realpath(layout.link), target, layout.platform))
+  } catch {
+    return false
+  }
+}
+
+
 async function assertRealDirectory(path) {
   const info = await optionalStat(path)
   if (info && (!info.isDirectory() || info.isSymbolicLink())) throw new Error('必须为真实目录，不能是链接: ' + path)
@@ -168,17 +178,24 @@ async function writeEntry(change, restore = false, platform = process.platform) 
   } finally { if (await optionalStat(temp)) await unlink(temp) }
 }
 
-async function switchLink(layout, target) {
+export async function switchLink(layout, target, symlinkImpl = symlink) {
   const info = await optionalStat(layout.link)
   if (info && !info.isSymbolicLink()) throw new Error('dsh_link不是目录链接')
   if (!target) { if (info) await unlink(layout.link); return }
+  const before = await selectedPackage(layout)
   if (layout.platform === 'win32') {
     if (info) await unlink(layout.link)
     try {
-      await symlink(target, layout.link, 'junction')
-      if (!samePath(await realpath(layout.link), target)) throw new Error('dsh_link读回失败')
+      await symlinkImpl(target, layout.link, 'junction')
+      if (!samePath(await realpath(layout.link), target, layout.platform)) throw new Error('dsh_link读回失败')
     } catch (error) {
-      if (info && !(await optionalStat(layout.link))) error.rollbackFailed = true
+      if (before) {
+        try {
+          if (await optionalStat(layout.link)) await unlink(layout.link)
+          await symlinkImpl(before, layout.link, 'junction')
+        } catch {}
+        error.rollbackFailed = !(await linkMatches(layout, before))
+      }
       throw error
     }
     return
@@ -188,17 +205,17 @@ async function switchLink(layout, target) {
   try {
     const current = await optionalStat(layout.link)
     if (current && !current.isSymbolicLink()) throw new Error('dsh_link在切换期间被替换为非链接')
-    await symlink(target, temp, 'dir')
+    await symlinkImpl(target, temp, 'dir')
     if (layout.platform === 'win32' && current) await unlink(layout.link)
     await rename(temp, layout.link)
     if (!samePath(await realpath(layout.link), target, layout.platform)) throw new Error('dsh_link读回失败')
   } catch (error) {
-    if (info && !(await optionalStat(layout.link))) error.rollbackFailed = true
+    if (before) error.rollbackFailed = !(await linkMatches(layout, before))
     throw error
   } finally { if (await optionalStat(temp)) await unlink(temp) }
 }
 
-export async function activateInstallation(layout, candidatePackage, { runningPackage, writeEntryImpl = writeEntry, switchLinkImpl = switchLink } = {}) {
+export async function activateInstallation(layout, candidatePackage, { runningPackage, writeEntryImpl = writeEntry, switchLinkImpl = switchLink, symlinkImpl = symlink } = {}) {
   const candidate = await realpath(candidatePackage)
   const expectedSlot = await selectInactiveSlot(layout, runningPackage)
   if (!samePath(candidate, join(expectedSlot, ...PACKAGE_PARTS))) throw new Error('候选不在空闲安装目录')
@@ -213,7 +230,7 @@ export async function activateInstallation(layout, candidatePackage, { runningPa
   await mkdir(join(layout.root, 'log'), { recursive: true })
   await writeFile(join(layout.root, 'log', 'entries.json'), JSON.stringify(changes))
   try {
-    await switchLinkImpl(layout, candidate)
+    await switchLinkImpl(layout, candidate, symlinkImpl)
     for (const change of changes.filter(c => !c.managed)) {
       applied.push(change)
       await writeEntryImpl(change, false, layout.platform)
@@ -223,10 +240,14 @@ export async function activateInstallation(layout, candidatePackage, { runningPa
   } catch (error) {
     const failures = []
     for (const change of applied.reverse()) { try { await writeEntryImpl(change, true, layout.platform) } catch (e) { failures.push(e.message) } }
-    try { await switchLinkImpl(layout, before) } catch (e) { failures.push(e.message) }
+    try { await switchLinkImpl(layout, before, symlinkImpl) } catch (e) { failures.push(e.message) }
+    if (before && !(await linkMatches(layout, before))) failures.push('恢复后的dsh_link目标与原目标不符')
+    if (!before && await optionalStat(layout.link)) failures.push('恢复后的dsh_link应为空')
     if (failures.length) {
       error.message += '; 恢复失败: ' + failures.join('; ')
       error.rollbackFailed = true
+    } else {
+      error.rollbackFailed = false
     }
     throw error
   }

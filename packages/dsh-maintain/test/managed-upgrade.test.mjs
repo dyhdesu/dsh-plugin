@@ -1,22 +1,28 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { createLayout } from '../src/managed-layout.mjs'
-import { createCandidateEnvironment } from '../src/managed-upgrade.mjs'
+import { createCandidateEnvironment, findNpmCli } from '../src/managed-upgrade.mjs'
 
 async function setup(t) {
   const prefix = await mkdtemp(join(tmpdir(), 'maintain-upgrade-test-'))
   t.after(() => rm(prefix, { recursive: true, force: true }))
   const profileRoot = join(prefix, '.dsh-maintain')
   await mkdir(profileRoot, { recursive: true })
-  const originalPackage = join(prefix, 'node_modules/@deepseek-ai/dsh')
+  const originalPackage = process.platform === 'win32'
+    ? join(prefix, 'node_modules/@deepseek-ai/dsh')
+    : join(prefix, 'lib/node_modules/@deepseek-ai/dsh')
   await mkdir(join(originalPackage, 'lib'), { recursive: true })
   await writeFile(join(originalPackage, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '1.0.0', bin: { dsh: 'lib/bin.js' } }))
   await writeFile(join(originalPackage, 'lib/bin.js'), 'original')
-  await writeFile(join(prefix, 'dsh.cmd'), '@"%dp0%node.exe" "%dp0%node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*')
-  const layout = Object.freeze({ ...(await createLayout({ prefix, originalPackage, platform: 'win32' })), root: profileRoot })
+  if (process.platform === 'win32') await writeFile(join(prefix, 'dsh.cmd'), '@"%dp0%node.exe" "%dp0%node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*')
+  else {
+    await mkdir(join(prefix, 'bin'), { recursive: true })
+    await symlink(join(originalPackage, 'lib/bin.js'), join(prefix, 'bin/dsh'))
+  }
+  const layout = Object.freeze({ ...(await createLayout({ prefix, originalPackage, platform: process.platform })), root: profileRoot })
   const api = await import('../src/managed-upgrade.mjs')
   const events = []
   const install = async ({ slot, version }) => {
@@ -32,6 +38,36 @@ async function setup(t) {
   return { prefix, layout, api, events, originalPackage, install, validate, beforeSwitch }
 }
 
+test('系统npm位于标准share目录时使用该真实CLI', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'maintain-system-node-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const node = join(root, 'bin', 'node')
+  const npmCli = join(root, 'share', 'nodejs', 'npm', 'bin', 'npm-cli.js')
+  await mkdir(dirname(node), { recursive: true })
+  await mkdir(dirname(npmCli), { recursive: true })
+  await writeFile(node, '')
+  await writeFile(npmCli, '')
+  assert.equal(await findNpmCli(node), await realpath(npmCli))
+})
+
+test('系统npm位于share/npm目录时使用该真实CLI', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'maintain-system-npm-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const node = join(root, 'bin', 'node')
+  const npmCli = join(root, 'share', 'npm', 'bin', 'npm-cli.js')
+  await mkdir(dirname(node), { recursive: true })
+  await mkdir(dirname(npmCli), { recursive: true })
+  await writeFile(node, '')
+  await writeFile(npmCli, '')
+  assert.equal(await findNpmCli(node), await realpath(npmCli))
+})
+test('POSIX槽位清理使用原生分隔符', async t => {
+  const f = await setup(t)
+  const layoutApi = await import('../src/managed-layout.mjs')
+  const slot = await layoutApi.selectInactiveSlot(f.layout, f.originalPackage)
+  await layoutApi.clearInactiveSlot(f.layout, slot, f.originalPackage)
+  assert.deepEqual(await (await import('node:fs/promises')).readdir(slot), [])
+})
 test('候选环境只继承启动npm所需变量并清除宿主注入点', async t => {
   const f = await setup(t)
   const keys = ['NODE_OPTIONS', 'NODE_PATH', 'APPDATA', 'LOCALAPPDATA', 'DSH_PROFILE', 'DSH_INSTALL_ANCHOR']
@@ -41,8 +77,13 @@ test('候选环境只继承启动npm所需变量并清除宿主注入点', async
     const env = createCandidateEnvironment({ root: f.layout.root })
     assert.equal(env.NODE_OPTIONS, undefined)
     assert.equal(env.NODE_PATH, undefined)
-    assert.equal(env.APPDATA, join(f.layout.root, 'candidate-home', 'AppData', 'Roaming'))
-    assert.equal(env.LOCALAPPDATA, join(f.layout.root, 'candidate-home', 'AppData', 'Local'))
+    if (process.platform === 'win32') {
+      assert.equal(env.APPDATA, join(f.layout.root, 'candidate-home', 'AppData', 'Roaming'))
+      assert.equal(env.LOCALAPPDATA, join(f.layout.root, 'candidate-home', 'AppData', 'Local'))
+    } else {
+      assert.equal(env.APPDATA, undefined)
+      assert.equal(env.LOCALAPPDATA, undefined)
+    }
     assert.equal(env.DSH_PROFILE, undefined)
     assert.equal(env.DSH_INSTALL_ANCHOR, undefined)
     assert.equal(env.HOME, join(f.layout.root, 'candidate-home'))

@@ -17,7 +17,12 @@ export async function saveManagedState(layout, state) {
 export async function findNpmCli(execPath = process.execPath) {
   const node = await realpath(execPath)
   const dir = dirname(node)
-  const candidates = [join(dir, 'node_modules/npm/bin/npm-cli.js'), join(dir, '../lib/node_modules/npm/bin/npm-cli.js')]
+  const candidates = [
+    join(dir, 'node_modules/npm/bin/npm-cli.js'),
+    join(dir, '../lib/node_modules/npm/bin/npm-cli.js'),
+    join(dir, '../share/nodejs/npm/bin/npm-cli.js'),
+    join(dir, '../share/npm/bin/npm-cli.js'),
+  ]
   for (const path of candidates) {
     try { if ((await stat(path)).isFile()) return await realpath(path) } catch (error) { if (error.code !== 'ENOENT') throw error }
   }

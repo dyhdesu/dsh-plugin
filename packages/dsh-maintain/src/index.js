@@ -348,14 +348,18 @@ export function apply(ctx, config, dependencies = {}) {
   // 运行版本探测:服务面可注入受控实现(测试面),缺省走真实盘读;
   // 约定恒 resolve 不 reject,真实实现全失败回 null,注入侧经 then 同步抛错同折进 rejection
   function resolveCurrentHostVersion() {
-    const probe = ctx.get('hostVersionProbe')
-    if (typeof probe === 'function') return Promise.resolve().then(probe)
-    const runtimeManifest = ctx.profileContext?.installAnchor
-      ? realpathSync(ctx.profileContext.installAnchor)
-      : join(dirname(dirname(realpathSync(process.argv[1]))), 'package.json')
-    const manifest = JSON.parse(readFileSync(runtimeManifest, 'utf8'))
-    if (manifest.name !== TARGET_PACKAGE || typeof manifest.version !== 'string') throw new Error('运行宿主清单无效')
-    return Promise.resolve(manifest.version)
+    try {
+      const probe = ctx.get('hostVersionProbe')
+      if (typeof probe === 'function') return Promise.resolve().then(probe)
+      const runtimeManifest = ctx.profileContext?.installAnchor
+        ? realpathSync(ctx.profileContext.installAnchor)
+        : join(dirname(dirname(realpathSync(process.argv[1]))), 'package.json')
+      const manifest = JSON.parse(readFileSync(runtimeManifest, 'utf8'))
+      if (manifest.name !== TARGET_PACKAGE || typeof manifest.version !== 'string') throw new Error('运行宿主清单无效')
+      return Promise.resolve(manifest.version)
+    } catch {
+      return Promise.resolve(null)
+    }
   }
 
   // 内存快照:仅存当前态,进程重启后从启动检查重新开始(设计约束:不持久化)。

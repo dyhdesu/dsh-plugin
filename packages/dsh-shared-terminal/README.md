@@ -26,7 +26,9 @@ AI `terminal` 工具与用户通过 DSH 官方 Sidebar `terminal` tab 操作同�
 
 命令由 shell 执行；本工具不做命令安全校验。Controller 使用 **system-user execution permissions**，不受 Agent sandbox/approval 策略约束。命令可能修改系统用户有权限访问的文件。停止 AI 回合不撤销已经交给 Controller 的 `write/close`；排队写入也可能在取消后执行。
 
-仅支持实测版本 DSH **0.2.0-rc.2 与 0.2.1-alpha.2**（精确允许表；其他版本，包括未测的 0.2.1 预发布，启动时干净禁用并告警）。`read` 使用这两个版本共同的 `@deepseek-ai/dsh-api-terminal-controller` 私有 owner lookup、BrowserTerminal operation queue 和 xterm-headless active buffer。新建终端的工作目录：0.2.0-rc.2 为创建时的宿主默认工作区目录；0.2.1 起为 Session 当前目录（Controller 工作目录服务）。插件不修改 DSH、不另开 PTY、不调用 `follow` 抢 attachment、不读取 serializer 输出。
+仅支持实测版本 DSH **0.2.0-rc.2 与 0.2.1-alpha.2**（精确允许表；其他版本启动时干净禁用并告警）。`read` 使用这两个版本共同的 `@deepseek-ai/dsh-api-terminal-controller` 私有 owner lookup、BrowserTerminal operation queue 和 xterm-headless active buffer。新建终端的工作目录：0.2.0-rc.2 为创建时的宿主默认工作区目录；0.2.1 起为 Session 当前目录（Controller 工作目录服务）。插件不修改 DSH、不另开 PTY、不调用 `follow`/`attach` 抢 attachment、不读取 serializer 输出。
+
+装载与功能是两层：peerDependencies 声明装载面（允许宿主装载后走停用路径），允许表声明功能面。dsh **0.2.1-rc.2** 实测：Controller 移除 `write`/`resize` 公开方法，输入改经 `attach` 命令帧通道——本包在该宿主可装载，启动时经版本白名单与 Controller 方法存在性检查双重拦截，不注册工具并告警（功能停用）；完全适配需按 attach 泵模型重构输入路径。
 
 Host 启动检查 Controller 版本、方法和 owner map；检测不匹配时不注册工具并告警。每次读取另检查终端实例、队列和屏幕结构，失败返回 `TERMINAL_UNAVAILABLE`。这不是公开 API，升级后不保证兼容。
 
@@ -59,4 +61,4 @@ npm test -- /path/to/isolated-dsh-host
 
 按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。本包声明 `dsh.hostMin = "0.2.0-rc.2"`:低于该代际的宿主 API 面未验证,compat 装载层自动排除。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md`。
 
-dsh `0.2.1-rc.2` 起官方 Controller 移除 `write`/`resize` 公开方法,终端输入改经 `attach` 命令帧通道(gateway 侧 uplink):本包在该宿主上可装载但功能停用(apply 内版本特性检测,打告警日志),完全适配需按 attach 泵模型重构输入路径。
+dsh `0.2.1-rc.2` 起官方 Controller 移除 `write`/`resize` 公开方法,终端输入改经 `attach` 命令帧通道(gateway 侧 uplink):本包在该宿主上可装载但功能停用(SUPPORTED_VERSIONS 版本白名单与 Controller 方法存在性检查双重拦截,打告警日志),完全适配需按 attach 泵模型重构输入路径。

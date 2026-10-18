@@ -310,6 +310,7 @@ function normalizeBundles(packages) {
  * 仓库清单孤儿清理:包目录改名/删除后,profile 残留的 file:/link: 指向本仓库 packages
  * 的依赖行、对应装载层条目与 dangling junction 一并移除(镜像官方 reconcile"失去声明
  * 或依赖行即出层"语义)。registry 来源的 @mzzsfy 条目(用户自装的其他包)不动。
+ * 这是全局卫生动作:单包模式同样全量执行,发现孤儿即触发全 profile 重装与重挂。
  */
 function pruneRepoOrphans(packages) {
   const manifest = readProfileManifest()
@@ -326,9 +327,14 @@ function pruneRepoOrphans(packages) {
     delete manifest.dependencies[key]
     orphanKeys.add(key)
     const name = key.slice(SCOPE.length)
-    if (existsSync(junctionPath(name))) {
-      rmSync(junctionPath(name), {recursive: true, force: true})
-      console.log(`FIX  ${key}: 已移除 dangling junction`)
+    // dangling junction 的目标已不存在,existsSync 跟随解析恒 false,须按链接形态判断
+    const junction = junctionPath(name)
+    const target = readJunctionTarget(junction)
+    if (target !== null) {
+      rmSync(junction, {recursive: true, force: true})
+      console.log(`FIX  ${key}: 已移除 dangling junction -> ${target}`)
+    } else if (existsSync(junction)) {
+      console.warn(`WARN ${key}: node_modules 位置已是实体目录而非链接,跳过删除`)
     }
     changed = true
   }

@@ -52,13 +52,14 @@ test('上游留档判定_ambient放松变异锁', t => {
   assert.equal(judgeUpstreamSeen([{ path: '/v1/models' }, { path: '/chat/completions' }]), true)
 })
 
-test('roundtrip判定_旧轮回复不能伪装本轮完成', () => {
+test('roundtrip判定_发话回显与回复渲染合取', () => {
   const base = { composerText: '', userMessage: '回复:anth', currentTurnText: 'echo-upstream-fixed', hasResponseGroup: true, errors: [] }
   assert.equal(judgeRoundtrip(base, '回复:anth'), true)
   assert.equal(judgeRoundtrip({ ...base, userMessage: '' }, '回复:anth'), false)
   assert.equal(judgeRoundtrip({ ...base, userMessage: '回复:ok' }, '回复:anth'), false)
-  // 0.2.1-rc.2 起用户消息不并入 turn 文本,本轮/旧轮绑定改由 wait-roundtrip
-  // 时序判定承担(send 后等待本轮响应组出现才采样),此处不再断言文本包含
+  // 0.2.1-rc.2 起用户消息不并入 turn 文本;本轮/旧轮绑定由消费方 llmUserEcho 的
+  // DOM turn 锚定(data-chat-turn + matchingUserRows.at(-1))承担,本 judge 单独
+  // 复用于新消费方时不防御旧轮回复
   assert.equal(judgeRoundtrip({ ...base, hasResponseGroup: false }, '回复:anth'), false)
   assert.equal(judgeRoundtrip({ ...base, composerText: '仍在输入' }, '回复:anth'), false)
   assert.equal(judgeRoundtrip({ ...base, errors: ['上游失败'] }, '回复:anth'), false)

@@ -1,11 +1,9 @@
-// 业务工具面 v2:管理员/调度员/实施角色的结构化命令入口,状态机全部在 core/task。
-// 角色凭证来自受管会话登记(caller),不接受模型自填;状态迁移经 updateAggregate RMW 原子落盘。
-import { createTask, defineWorkItem, authorizeTask, submitReport, requestResume } from './core/task.mjs'
+// 业务工具只对唯一管理员入口开放,执行/验收报告通过服务端事件读取而非模型工具直写。
+import { createTask, defineWorkItem, authorizeTask, requestResume, closeTask, confirmResume } from './core/task.mjs'
+import { createRunService } from './run-service.mjs'
 
 const ROLE_CAPABILITIES = {
-  admin: new Set(['boss_simulator_create_task', 'boss_simulator_define_workitem', 'boss_simulator_authorize_task', 'boss_simulator_query_tasks']),
-  dispatcher: new Set(['boss_simulator_define_workitem', 'boss_simulator_report_result', 'boss_simulator_request_resume', 'boss_simulator_query_tasks']),
-  worker: new Set(['boss_simulator_report_result', 'boss_simulator_query_tasks']),
+  admin: new Set(['boss_simulator_create_task', 'boss_simulator_define_workitem', 'boss_simulator_authorize_task', 'boss_simulator_request_resume', 'boss_simulator_query_tasks', 'boss_simulator_dispatch_run', 'boss_simulator_close_task', 'boss_simulator_confirm_resume']),
 }
 
 function assertRole(caller, tool) {
@@ -25,7 +23,8 @@ function updateTask(store, taskId, transition) {
   })
 }
 
-export function createAgentTools({ store, now }) {
+export function createAgentTools(deps) {
+  const { store, now } = deps
   async function handle(tool, args, caller) {
     assertRole(caller, tool)
     if (tool === 'boss_simulator_create_task') {
@@ -42,24 +41,27 @@ export function createAgentTools({ store, now }) {
       const authorized = await updateTask(store, args.taskId, (aggregate) => authorizeTask(aggregate, { sourceMessageRef: args.sourceMessageRef }))
       return { ok: true, businessState: authorized.businessState, controlState: authorized.control.state }
     }
-    if (tool === 'boss_simulator_report_result') {
-      await updateTask(store, args.taskId, (aggregate) => submitReport(aggregate, {
-        reportId: args.reportId, runId: args.runId, verdict: args.verdict,
-        coveredCriterionIds: args.coveredCriterionIds, issues: args.issues, evidence: args.evidence,
-      }))
-      return { ok: true }
-    }
     if (tool === 'boss_simulator_request_resume') {
-      const current = await store.loadAggregate(args.taskId)
-      if (!current) throw new Error(`任务不存在: ${args.taskId}`)
-      const requested = requireOk(requestResume(current, {
+      const global = await store.loadControl()
+      const requested = await updateTask(store, args.taskId, current => requestResume(current, {
         resumeIntentId: args.resumeIntentId,
         sourceMessageRef: args.sourceMessageRef,
         expectedExecutionEpoch: args.expectedExecutionEpoch ?? current.control.executionEpoch,
-        globalStopGeneration: args.globalStopGeneration,
+        globalStopGeneration: global.globalStopGeneration,
       }))
-      await store.saveAggregate(requested.result.aggregate)
-      return { ok: true, controlState: requested.result.aggregate.control.state }
+      return { ok: true, controlState: requested.control.state }
+    }
+    if (tool === 'boss_simulator_dispatch_run') {
+      if (!deps.sessionAdapter) throw new Error('标准会话适配未就绪')
+      return createRunService(deps).dispatch(args)
+    }
+    if (tool === 'boss_simulator_close_task') {
+      const closed = await updateTask(store, args.taskId, aggregate => closeTask(aggregate, args))
+      return { ok: true, businessState: closed.businessState }
+    }
+    if (tool === 'boss_simulator_confirm_resume') {
+      if (!deps.confirmResume) throw new Error('恢复核对服务未就绪')
+      return deps.confirmResume(args)
     }
     if (tool === 'boss_simulator_query_tasks') {
       return { ok: true, aggregate: await store.loadAggregate(args.taskId) }

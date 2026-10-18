@@ -13,17 +13,24 @@ test('控制室装配不得向全局工具面注册业务工具', async () => {
   const registered = []
   const disposers = []
   let opening
+  let presetReady
   const table = { get: () => undefined }
   const services = {
     storageDomain: { open: async () => ({ table: () => table, close() {} }) },
     webServer: { register: () => () => {} },
-    tools: { register: (definition) => { registered.push(definition.name); return () => {} }, guard: () => () => {} },
+    tools: { register: (definition) => { registered.push(`tool:${definition.name}`); return () => {} }, guard: () => () => {} },
+    agentPresets: {
+      async register(definition) { registered.push(`preset:${definition.id}`); return async () => {} },
+      async list() { return [] },
+      async resolve() { return { broken: undefined } },
+    },
   }
   const ctx = {
-    inject(names, activate) {
+    async inject(names, activate) {
       if (names.every((name) => services[name])) {
-        const result = activate(services)
-        if (names.includes('storageDomain')) opening = result
+        const result = await activate(services)
+        if (names.includes('storageDomain')) opening = Promise.resolve(result)
+        if (names.includes('agentPresets')) presetReady = Promise.resolve(result)
       }
     },
     effect(effect) { if (typeof effect === 'function') { const dispose = effect(); if (typeof dispose === 'function') disposers.push(dispose) } },
@@ -31,7 +38,8 @@ test('控制室装配不得向全局工具面注册业务工具', async () => {
   }
   registerControl(ctx)
   await opening
-  assert.deepEqual(registered, [], '控制室只登记角色预设；普通聊天不能继承公司管理schema')
+  await presetReady
+  assert.deepEqual(registered, ['preset:boss-simulator-admin'], '注册只暴露单个工作台 preset，标准聊天不继承公司管理 schema')
   disposers.reverse().forEach((dispose) => dispose())
 })
 

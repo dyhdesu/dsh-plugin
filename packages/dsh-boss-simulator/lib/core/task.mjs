@@ -43,7 +43,6 @@ export function createTask({ taskId, title, projectWorkspaceId, definition, prio
     runs: {},
     sessions: {},
     reports: {},
-    notices: {},
     resumeIntents: {},
     appliedActions: {},
     usageLedger: {},
@@ -151,7 +150,7 @@ export function reviseDefinition(aggregate, { definition }) {
 }
 
 export function hasActiveRuns(aggregate) {
-  return Object.values(aggregate.runs).some((r) => ['prepared', 'submitted', 'running'].includes(r.state))
+  return Object.values(aggregate.runs).some((r) => ['prepared', 'submitted', 'running', 'unknown'].includes(r.state))
 }
 
 // 执行许可九条(生命周期"全局与局部停止代次");宿主能力就绪由适配层另行检查
@@ -170,7 +169,7 @@ export function checkExecutionPermission(aggregate, globalControl, { workItemId,
   if (!roles.includes(actorRole)) return fail(E.INVALID_ARGUMENT, `phase ${phase} 不允许角色 ${actorRole}`)
   if (!DISPATCHABLE_BUSINESS.has(aggregate.businessState)) return fail(E.INVALID_ARGUMENT, `业务状态 ${aggregate.businessState} 不可派发`)
   const slotKey = actionKeyOf([aggregate.taskId, workItemId, phase, actorRole])
-  const slotTaken = Object.values(aggregate.runs).some((r) => r.executionSlot === slotKey && ['prepared', 'submitted', 'running'].includes(r.state))
+  const slotTaken = Object.values(aggregate.runs).some((r) => r.executionSlot === slotKey && ['prepared', 'submitted', 'running', 'unknown'].includes(r.state))
   if (slotTaken) return fail(E.EXECUTION_STILL_ACTIVE, '同一执行槽存在未核清 Run')
   return pass({ slotKey })
 }
@@ -178,7 +177,7 @@ export function checkExecutionPermission(aggregate, globalControl, { workItemId,
 const DISPATCHABLE_BUSINESS = new Set(['ready', 'implementing', 'awaiting_acceptance'])
 
 // run.dispatch 落 Run:executionSlot 保证至多一个有效 Run;代次冻结进 Run
-export function recordRun(aggregate, { runId, workItemId, phase, actorRole, sessionId, requestId, presetId, slotKey, globalControl, attemptOrdinal = 1 }) {
+export function recordRun(aggregate, { runId, workItemId, phase, actorRole, sessionId, requestId, slotKey, globalControl, attemptOrdinal = 1 }) {
   const ts = aggregate.now()
   const run = {
     runId,
@@ -192,7 +191,10 @@ export function recordRun(aggregate, { runId, workItemId, phase, actorRole, sess
     executionSlot: slotKey,
     sessionId,
     requestId,
-    presetId,
+    requiredCriterionIds: [...(aggregate.workItems[workItemId]?.requiredCriterionIds ?? [])],
+    artifactRevision: actorRole === 'reviewer'
+      ? Object.values(aggregate.runs).filter(candidate => candidate.workItemId === workItemId && candidate.actorRole === 'executor').length
+      : Object.values(aggregate.runs).filter(candidate => candidate.workItemId === workItemId && candidate.actorRole === 'executor').length + 1,
     requestedModel: null,
     state: 'prepared',
     executionTreeSettled: false,
@@ -220,13 +222,27 @@ export function markSessionExecutor(aggregate, { sessionId, runIds }) {
 }
 
 // 报告提交:executor=ready_for_review/needs_help;reviewer=pass/issues;旧定义/旧 epoch 报告标 historical
-export function submitReport(aggregate, { reportId, runId, verdict, coveredCriterionIds = [], issues = [], evidence = [], reviewerSessionId }) {
+export function submitReport(aggregate, { reportId, runId, sessionId, eventSeq, summary, verdict, coveredCriterionIds = [], issues = [], evidence = [] }) {
   const run = aggregate.runs[runId]
   if (!run) return fail(E.NOT_FOUND, `Run 不存在: ${runId}`)
+  if (sessionId !== undefined && run.sessionId !== sessionId) return fail(E.INVALID_ARGUMENT, '报告 session 与 Run 绑定不一致')
+  if (eventSeq !== undefined && (!Number.isSafeInteger(eventSeq) || eventSeq < 0)) return fail(E.INVALID_ARGUMENT, '报告缺少有效的宿主事件序号')
+  if (eventSeq !== undefined && Object.values(aggregate.reports).some((report) => report.sourceMessageRef?.sessionId === sessionId && report.sourceMessageRef?.eventSeq === eventSeq)) {
+    return fail(E.IDEMPOTENCY_CONFLICT, 'assistant 消息已被采纳为报告')
+  }
+  if (!Array.isArray(coveredCriterionIds) || !Array.isArray(issues) || !Array.isArray(evidence) || !coveredCriterionIds.every((id) => typeof id === 'string' && id.trim()) || !issues.every((issue) => typeof issue === 'string' && issue.trim()) || !evidence.every((item) => typeof item === 'string' && item.trim()) || new Set(coveredCriterionIds).size !== coveredCriterionIds.length) return fail(E.INVALID_ARGUMENT, '报告列表字段必须为无重复非空字符串数组')
+  if (typeof reportId !== 'string' || !reportId || reportId.length > 160) return fail(E.INVALID_ARGUMENT, 'reportId 非法')
+  if (typeof summary !== 'string' || !summary.trim()) return fail(E.INVALID_ARGUMENT, '报告 summary 必填')
+
   const isReviewer = run.phase === 'accept' || (run.phase === 'integrate' && actorRoleIs(run, 'reviewer'))
+  if (Object.hasOwn(aggregate.reports, reportId)) return fail(E.IDEMPOTENCY_CONFLICT, `报告 ID 已存在: ${reportId}`)
+  const requiredCriteria = run.requiredCriterionIds ?? aggregate.workItems[run.workItemId]?.requiredCriterionIds ?? []
+  if (isReviewer && coveredCriterionIds.some((id) => !requiredCriteria.includes(id))) return fail(E.INVALID_ARGUMENT, '验收报告引用了未知标准')
+  if (isReviewer && verdict === 'pass' && requiredCriteria.some((id) => !coveredCriterionIds.includes(id))) return fail(E.INVALID_ARGUMENT, 'pass 报告未覆盖全部必需标准')
+  if (verdict === 'pass' && issues.length > 0) return fail(E.INVALID_ARGUMENT, 'pass 报告不允许携带 issues')
   if (isReviewer) {
     if (!['pass', 'issues'].includes(verdict)) return fail(E.INVALID_ARGUMENT, `验收结论非法: ${verdict}`)
-    if (aggregate.sessions[run.sessionId]?.executorOf) return fail(E.INVALID_ARGUMENT, '验收 session 与实施 session 相同,拒绝自验')
+    if (aggregate.sessions[run.sessionId]?.executorOf || Object.values(aggregate.runs).some(candidate => candidate.sessionId === run.sessionId && candidate.actorRole === 'executor')) return fail(E.INVALID_ARGUMENT, '验收 session 与实施 session 相同,拒绝自验')
     if (verdict === 'pass' && issues.length > 0) return fail(E.INVALID_ARGUMENT, 'pass 报告不允许携带 issues')
   } else if (!['ready_for_review', 'needs_help'].includes(verdict)) {
     return fail(E.INVALID_ARGUMENT, `实施结论非法: ${verdict}`)
@@ -241,9 +257,12 @@ export function submitReport(aggregate, { reportId, runId, verdict, coveredCrite
   next.reports = {
     ...aggregate.reports,
     [reportId]: {
-      reportId, runId, workItemId: run.workItemId,
+      reportId, taskId: aggregate.taskId, workItemId: run.workItemId, runId,
+      ...(summary !== undefined ? { summary } : {}),
+      ...(eventSeq !== undefined ? { sourceMessageRef: { sessionId, eventSeq } } : {}),
       definitionRevision: run.definitionRevision,
       artifactRef: run.artifactRef ?? null,
+      artifactRevision: run.artifactRevision ?? 0,
       verdict, coveredCriterionIds, issues, evidence,
       historical,
       createdAt: next.updatedAt,
@@ -277,6 +296,15 @@ export function closeTask(aggregate, { passReportId, conclusion }) {
   if (!report || report.historical) return fail(E.INVALID_ARGUMENT, '结案须引用当前有效的独立 pass 报告')
   if (report.verdict !== 'pass') return fail(E.INVALID_ARGUMENT, '结案须引用 pass 报告')
   if (report.definitionRevision !== aggregate.definitionRevision) return fail(E.INVALID_ARGUMENT, 'pass 报告不覆盖当前定义')
+  const effectivePass = candidate => {
+    const run = aggregate.runs[candidate.runId]
+    const artifactRevision = Object.values(aggregate.runs).filter(execution => execution.workItemId === candidate.workItemId && execution.actorRole === 'executor').length
+    return candidate.verdict === 'pass' && !candidate.historical && candidate.definitionRevision === aggregate.definitionRevision
+      && run?.actorRole === 'reviewer' && candidate.artifactRevision === artifactRevision
+      && !Object.values(aggregate.runs).some(execution => execution.sessionId === run.sessionId && execution.actorRole === 'executor')
+  }
+  if (!effectivePass(report)) return fail(E.INVALID_ARGUMENT, 'pass 报告不覆盖当前实施产物')
+  if (Object.keys(aggregate.workItems).some(workItemId => !Object.values(aggregate.reports).some(candidate => candidate.workItemId === workItemId && effectivePass(candidate)))) return fail(E.INVALID_ARGUMENT, '所有工作项须有当前产物的独立验收通过报告')
   const next = bump(aggregate)
   next.businessState = 'completed'
   next.control = { ...next.control, state: 'paused', closeConclusion: conclusion ?? null }
@@ -325,7 +353,7 @@ export function confirmStopped(aggregate) {
 function settleActiveRuns(runs, state) {
   const next = { ...runs }
   for (const [id, run] of Object.entries(runs)) {
-    if (['prepared', 'submitted', 'running'].includes(run.state)) next[id] = { ...run, state, endedAt: run.startedAt ? undefined : null }
+    if (['prepared', 'submitted', 'running', 'unknown'].includes(run.state)) next[id] = { ...run, state, endedAt: run.startedAt ? undefined : null }
   }
   return next
 }
@@ -391,7 +419,7 @@ export function replaceWorkItem(aggregate, { oldWorkItemId, newWorkItemId, title
   const old = aggregate.workItems[oldWorkItemId]
   if (!old) return fail(E.NOT_FOUND, `workItem 不存在: ${oldWorkItemId}`)
   if (aggregate.workItems[newWorkItemId]) return fail(E.INVALID_ARGUMENT, `新 workItem ID 已存在: ${newWorkItemId}`)
-  const inFlight = Object.values(aggregate.runs).some((r) => r.workItemId === oldWorkItemId && ['prepared', 'submitted', 'running'].includes(r.state))
+  const inFlight = Object.values(aggregate.runs).some((r) => r.workItemId === oldWorkItemId && ['prepared', 'submitted', 'running', 'unknown'].includes(r.state))
   if (inFlight) return fail(E.EXECUTION_STILL_ACTIVE, '旧执行树存在未核清 Run,不可替代')
   if (!reason) return fail(E.INVALID_ARGUMENT, '替代必须给出解释')
   const draft = { ...aggregate, workItems: { ...aggregate.workItems, [oldWorkItemId]: { ...old, replacedBy: newWorkItemId } } }

@@ -27,7 +27,7 @@ function makeTask(taskId, state, index) {
         runId, workItemId: phase === 'accept' ? 'review' : 'implementation', phase,
         actorRole: phase === 'accept' ? 'reviewer' : 'executor', attemptOrdinal: phase === 'fix' ? 2 : 1,
         definitionRevision: 1, executionEpoch: 0, globalStopGeneration: 0, executionSlot: `${taskId}:${phase}`,
-        sessionId, requestId: `request-${taskId}-${runId}`, presetId: phase === 'accept' ? 'boss-simulator-reviewer' : 'boss-simulator-worker',
+        sessionId, requestId: `request-${taskId}-${runId}`,
         state: stateOfRun, executionTreeSettled: ['settled', 'interrupted', 'rejected'].includes(stateOfRun),
         startedAt: ['prepared', 'submitted'].includes(stateOfRun) ? null : 1_700_000_000_000 + index * 60_000 + offset,
         endedAt: ['running', 'submitted'].includes(stateOfRun) ? null : 1_700_000_000_000 + index * 60_000 + offset + 45_000,

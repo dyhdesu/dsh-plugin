@@ -100,14 +100,14 @@ export function projectTaskSummary(aggregate) {
     definitionRevision: aggregate.definitionRevision,
     authorized: aggregate.authorization !== null,
     workItemCount: Object.keys(aggregate.workItems).length,
-    activeRunCount: Object.values(aggregate.runs).filter((r) => ['prepared', 'submitted', 'running'].includes(r.state)).length,
+    activeRunCount: Object.values(aggregate.runs).filter((r) => ['prepared', 'submitted', 'running', 'unknown'].includes(r.state)).length,
     runs: Object.values(aggregate.runs).map((r) => ({
-      runId: r.runId, phase: r.phase, state: r.state, presetId: r.presetId,
+      runId: r.runId, phase: r.phase, state: r.state,
       startedAt: r.startedAt, endedAt: r.endedAt, tokenTotal: r.tokenTotal, usageCoverage: r.usageCoverage,
       actualModel: attribution.get(r.runId) ?? null,
     })),
     usage: taskUsageSummary(aggregate),
-    modelTaskCount: new Set(Object.values(aggregate.runs).map((r) => r.presetId).filter(Boolean)).size,
+    modelTaskCount: new Set([...attribution.values()].filter(Boolean)).size,
     updatedAt: aggregate.updatedAt,
   }
 }
@@ -134,10 +134,12 @@ export function projectTaskDetail(aggregate, globalControl) {
       runId: r.runId, workItemId: r.workItemId, phase: r.phase, state: r.state,
       attemptOrdinal: r.attemptOrdinal, executionEpoch: r.executionEpoch,
       globalStopGeneration: r.globalStopGeneration, sessionId: r.sessionId,
-      presetId: r.presetId, startedAt: r.startedAt, endedAt: r.endedAt,
+      startedAt: r.startedAt, endedAt: r.endedAt,
       tokenTotal: r.tokenTotal, usageCoverage: r.usageCoverage,
       actualModel: attribution.get(r.runId) ?? null,
       stopObserved: r.stopObserved ?? null,
+      reportDiagnostic: r.reportDiagnostic ?? null,
+      dispatchError: r.dispatchError ?? null,
     })),
     reports: Object.values(aggregate.reports).map((r) => ({
       reportId: r.reportId, runId: r.runId, verdict: r.verdict, historical: r.historical,
@@ -152,7 +154,7 @@ export function projectTaskDetail(aggregate, globalControl) {
 export function deriveWorkItemState(aggregate, workItem) {
   if (workItem.replacedBy) return 'withdrawn'
   const runs = Object.values(aggregate.runs).filter((r) => r.workItemId === workItem.workItemId)
-  const inFlight = runs.find((r) => ['prepared', 'submitted', 'running'].includes(r.state))
+  const inFlight = runs.find((r) => ['prepared', 'submitted', 'running', 'unknown'].includes(r.state))
   if (inFlight) return 'executing'
   const depsMissing = workItem.dependencyWorkItemIds.some((id) => {
     const dep = aggregate.workItems[id]

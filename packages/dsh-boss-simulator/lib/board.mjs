@@ -3,9 +3,8 @@
 import { randomUUID } from 'node:crypto'
 import { queryBoard, projectTaskDetail } from './core/query.mjs'
 import { stopAll, recordStopOperation } from './core/global-control.mjs'
-import { stopTask, confirmStopped, hasActiveRuns, submitReport } from './core/task.mjs'
 import { createSettings, saveSettings } from './core/settings.mjs'
-import { dispatchRun, interruptTask } from './core/orchestrator.mjs'
+import { interruptTask } from './core/orchestrator.mjs'
 import { createTask, defineWorkItem, authorizeTask } from './core/task.mjs'
 import { ADMIN_PRESET_ID } from './presets.mjs'
 
@@ -151,49 +150,51 @@ export function createBoardApi({ store, drive, now = Date.now, serverEpoch = ran
       }
       const payloadHash = body.payloadHash ?? JSON.stringify(body)
       if (body.global) {
+        const stopTargets = (await store.listAggregates()).filter(task => !['completed', 'cancelled'].includes(task.businessState)).map(task => task.taskId)
         let envelope = null
         await store.updateControl((control) => {
           envelope = stopAll(control, { commandId: body.commandId, payloadHash, sourceRef: body.sourceRef })
-          return envelope.result.state
+          if (!envelope.ok) return control
+          if (envelope.result.replayed) return envelope.result.state
+          const next = envelope.result.state
+          const operationId = envelope.result.result.operationId
+          return { ...next, stopOperations: { ...next.stopOperations, [operationId]: { ...next.stopOperations[operationId], taskIds: stopTargets } } }
         })
         if (!envelope.ok) {
           sendJson(res, 409, { error: envelope.message })
           return
         }
-        sendJson(res, 200, { accepted: true, globalStopGeneration: envelope.result.result.globalStopGeneration, replayed: envelope.result.replayed })
+        const savedControl = await store.loadControl()
+        const targetIds = savedControl.stopOperations[envelope.result.result.operationId].taskIds
+        const tasks = (await Promise.all(targetIds.map(id => store.loadAggregate(id)))).filter(task => task && !['completed', 'cancelled'].includes(task.businessState))
+        const outcomes = []
+        for (const task of tasks) {
+          try {
+            const outcome = await interruptTask(store, task, { sessionAdapter: drive?.sessionAdapter, reason: 'global_stop', commandId: body.commandId })
+            outcomes.push({ taskId: task.taskId, stopConfirmed: outcome.stopConfirmed === true, errors: [...(outcome.cancelErrors ?? []), ...(outcome.reconcileErrors ?? [])] })
+          } catch (error) { outcomes.push({ taskId: task.taskId, stopConfirmed: false, errors: [{ message: error.message }] }) }
+        }
+        sendJson(res, 200, { accepted: true, globalStopGeneration: envelope.result.result.globalStopGeneration, replayed: envelope.result.replayed, pendingStop: outcomes.some((outcome) => !outcome.stopConfirmed), tasks: outcomes })
         return
       }
       if (!body.taskId) {
         sendJson(res, 400, { error: '缺少 taskId 或 global' })
         return
       }
-      await store.updateControl((control) => recordStopOperation(control, { commandId: body.commandId, taskId: body.taskId, payloadHash, sourceRef: body.sourceRef }).result.state)
+      let receipt
+      await store.updateControl((control) => {
+        receipt = recordStopOperation(control, { commandId: body.commandId, taskId: body.taskId, payloadHash, sourceRef: body.sourceRef })
+        return receipt.ok ? receipt.result.state : control
+      })
+      if (!receipt.ok) return sendJson(res, 409, { error: receipt.message })
       const aggregate = await store.loadAggregate(body.taskId)
       if (!aggregate) {
         sendJson(res, 404, { error: `任务不存在: ${body.taskId}` })
         return
       }
-      const stopped = stopTask(aggregate, { reason: body.reason ?? 'user_interrupt' })
-      if (!stopped.ok) {
-        sendJson(res, 409, { error: stopped.message })
-        return
-      }
-      // 在途 Run:取消会话 turn 与队列(cancelSession),事件归并负责终态收敛
-      if (drive?.sessionAdapter && hasActiveRuns(stopped.result.aggregate)) {
-        const outcome = await interruptTask(store, stopped.result.aggregate, { sessionAdapter: drive.sessionAdapter })
-        if (outcome.ok) {
-          await store.saveAggregate(outcome.aggregate)
-          const final2 = await store.loadAggregate(body.taskId)
-          sendJson(res, 200, { accepted: true, controlState: final2.control.state, pendingStop: hasActiveRuns(final2), cancelErrors: outcome.cancelErrors })
-          return
-        }
-      }
-      await store.saveAggregate(stopped.result.aggregate)
-      const noActive = !hasActiveRuns(stopped.result.aggregate)
-      const confirmed = noActive ? confirmStopped(stopped.result.aggregate) : null
-      const final = confirmed?.ok ? confirmed.result.aggregate : stopped.result.aggregate
-      if (confirmed?.ok) await store.saveAggregate(final)
-      sendJson(res, 200, { accepted: true, controlState: final.control.state, pendingStop: !noActive })
+      const outcome = await interruptTask(store, aggregate, { sessionAdapter: drive?.sessionAdapter, reason: body.reason ?? 'user_interrupt', commandId: body.commandId })
+      if (!outcome.ok) return sendJson(res, 409, { error: outcome.message })
+      sendJson(res, 200, { accepted: true, controlState: outcome.aggregate.control.state, pendingStop: !outcome.stopConfirmed, cancelErrors: outcome.cancelErrors, reconcileErrors: outcome.reconcileErrors ?? [] })
     } catch (error) {
       sendJson(res, error.statusCode ?? 500, { error: error.message })
     }
@@ -236,8 +237,7 @@ export function createBoardApi({ store, drive, now = Date.now, serverEpoch = ran
     }
   }
 
-  // 测试编排入口(PKG-2: 驱动执行/停止链证明,非正式角色自主调度):
-  // dispatch=经受管会话真实派发;report=以受管角色身份提交结构化报告
+  // 测试入口允许创建、派发，不允许从请求体直接写入报告事实。
   async function handleDrive(req, res) {
     try {
       if (rejectCrossOrigin(req, res)) return
@@ -279,80 +279,26 @@ export function createBoardApi({ store, drive, now = Date.now, serverEpoch = ran
         sendJson(res, 200, { ok: true, taskId: agg.taskId, businessState: agg.businessState })
         return
       }
-      if (body.action === 'dispatch' || body.action === 'report') {
-        const aggregate = await store.loadAggregate(body.taskId)
-        if (!aggregate) {
-          sendJson(res, 404, { error: `任务不存在: ${body.taskId}` })
-          return
-        }
-      }
       if (body.action === 'dispatch') {
-        const aggregate = await store.loadAggregate(body.taskId)
-        const outcome = await dispatchRun(store, aggregate, {
-          runId: body.runId ?? `run-${now().toString(36)}`,
-          workItemId: body.workItemId,
+        const outcome = await drive.dispatch({
+          ...body,
+          runId: body.runId ?? randomUUID(),
+          requestId: body.requestId ?? randomUUID(),
           phase: body.phase ?? 'implement',
-          actorRole: body.phase === 'accept' ? 'reviewer' : 'executor',
-          requestId: body.requestId ?? `req-${now().toString(36)}`,
           content: body.content ?? `任务 ${body.taskId}/${body.workItemId}`,
-          presetId: body.presetId ?? 'boss-simulator-worker',
-          sessionAdapter: drive.sessionAdapter,
-          globalControl: control,
-          sessionWorkspaceId: body.sessionWorkspaceId,
-          sessionCwd: body.sessionCwd,
         })
-        if (!outcome.ok) {
-          sendJson(res, 409, { error: outcome.message, code: outcome.code, debugStack: outcome.stack?.split('\n').slice(0, 8) })
-          return
-        }
-        await store.saveAggregate(outcome.aggregate)
-        drive?.followRuns?.(body.taskId, outcome.sessionId)
-        sendJson(res, 200, { ok: true, runId: outcome.runId, sessionId: outcome.sessionId, state: outcome.aggregate.runs[outcome.runId]?.state })
+        sendJson(res, 200, outcome)
         return
       }
-      if (body.action === 'prompt') {
-        if (!drive.sessionAdapter) return sendJson(res, 501, { error: '会话适配未装配' })
-        let sessionId = body.sessionId
-        if (!sessionId && body.preset) {
-          const created = await drive.sessionAdapter.ensureSession({ cwd: body.sessionCwd ?? '.', agentPreset: body.preset })
-          sessionId = created?.sessionId
-          if (!sessionId) {
-            sendJson(res, 500, { error: '会话创建未返回 sessionId', debug: JSON.stringify(created)?.slice(0, 200) })
-            return
-          }
-        }
-        if (!sessionId) return sendJson(res, 400, { error: '缺少 sessionId 或 preset' })
-        const outcome = await drive.sessionAdapter.dispatchPrompt({
-          sessionId,
-          requestId: body.requestId ?? `req-${now().toString(36)}`,
-          mode: body.mode === 'steer' ? 'steer' : 'queue',
-          content: typeof body.content === 'string' ? [{ type: 'text', text: body.content }] : body.content ?? [{ type: 'text', text: '继续' }],
-        })
-        sendJson(res, 200, { ok: true, accepted: outcome?.accepted ?? false, turnId: outcome?.turnId ?? null })
-        return
-      }
-      if (body.action === 'report') {
-        const aggregate = await store.loadAggregate(body.taskId)
-        const outcome = submitReport(aggregate, {
-          reportId: body.reportId ?? `rep-${now().toString(36)}`,
-          runId: body.runId,
-          verdict: body.verdict,
-          coveredCriterionIds: body.coveredCriterionIds ?? [],
-          issues: body.issues ?? [],
-        })
-        if (!outcome.ok) {
-          sendJson(res, 409, { error: outcome.message, code: outcome.code })
-          return
-        }
-        await store.saveAggregate(outcome.result.aggregate)
-        sendJson(res, 200, { ok: true, businessState: outcome.result.aggregate.businessState })
-        return
-      }
-      sendJson(res, 400, { error: 'action 须为 create/dispatch/report' })
+      sendJson(res, 400, { error: 'action 须为 create/dispatch' })
     } catch (error) {
       sendJson(res, error.statusCode ?? 500, { error: error.message })
     }
   }
 
-  return { handleBoard, handleAdmin, handleInterrupt, handleSettings, handleDrive }
+  const handleInterruptWithGate = handleInterrupt
+  async function gatedInterrupt(req, res) {
+    return drive?.withExecution ? drive.withExecution(() => handleInterruptWithGate(req, res)) : handleInterruptWithGate(req, res)
+  }
+  return { handleBoard, handleAdmin, handleInterrupt: gatedInterrupt, handleSettings, handleDrive }
 }

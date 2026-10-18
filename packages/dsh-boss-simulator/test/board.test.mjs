@@ -25,6 +25,7 @@ async function makeStore() {
   records.set('taskIndex', { ids: ['t1'] })
   const store = {
     async loadAggregate(id) { return records.get(`task/${id}`) },
+    async updateAggregate(id, update) { const next = update(records.get(`task/${id}`)); records.set(`task/${id}`, next); return next },
     async saveAggregate(agg) { records.set(`task/${agg.taskId}`, agg); return agg },
     async listAggregates() { return [...records.values()].filter((r) => r.taskId) },
     async loadControl() { return control },
@@ -49,6 +50,41 @@ function streamReq({ method, headers, url = '/api/boss-simulator/board', body })
     },
   }
 }
+
+test('Given 两项在途任务 When 全局停止 Then 每项先落停止代次再取消且只增一次epoch', async () => {
+  const { store, records } = await makeStore()
+  const first = await store.loadAggregate('t1')
+  for (const [taskId, sessionId] of [['t1', 's1'], ['t2', 's2']]) records.set(`task/${taskId}`, { ...first, taskId, runs: { r1: { runId: 'r1', state: 'running', sessionId } } })
+  const cancelled = []
+  const api = createBoardApi({ store, drive: { sessionAdapter: {
+    async inspectSession({ sessionId }) { return { running: !cancelled.includes(sessionId), pendingItemIds: [], stopped: cancelled.includes(sessionId) } },
+    async cancelSession({ sessionId }) {
+      const task = await store.loadAggregate(sessionId === 's1' ? 't1' : 't2')
+      assert.equal(task.control.state, 'stopping')
+      assert.equal(task.control.executionEpoch, 1)
+      cancelled.push(sessionId)
+      return { accepted: true }
+    },
+  } } })
+  const response = jsonRes()
+  await api.handleInterrupt(streamReq({ headers: { host: 'h' }, body: JSON.stringify({ global: true, commandId: 'stop-global' }) }), response)
+  assert.equal(response.status, 200)
+  assert.deepEqual(cancelled, ['s1', 's2'])
+  assert.equal(response.payload.pendingStop, false)
+  assert.equal((await store.loadAggregate('t1')).control.executionEpoch, 1)
+})
+
+test('Given 全局停止后新增任务 When 重放旧全局命令 Then 新任务保持 active', async () => {
+  const { store } = await makeStore()
+  const api = createBoardApi({ store })
+  const request = () => streamReq({ headers: { host: 'h' }, body: JSON.stringify({ global: true, commandId: 'stop-old' }) })
+  await api.handleInterrupt(request(), jsonRes())
+  const initial = await store.loadAggregate('t1')
+  await store.saveAggregate({ ...initial, taskId: 't2', control: { ...initial.control, state: 'active', executionEpoch: 0, stopCommandIds: [] } })
+  await api.handleInterrupt(request(), jsonRes())
+  assert.equal((await store.loadAggregate('t2')).control.state, 'active')
+  assert.equal((await store.loadAggregate('t2')).control.executionEpoch, 0)
+})
 
 test('GET board 返回查询投影(envelope+counts+items)', async () => {
   const { store } = await makeStore()

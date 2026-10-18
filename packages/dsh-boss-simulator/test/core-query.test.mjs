@@ -27,7 +27,7 @@ function runOn(agg, runId, phase = 'implement', sessionId = 's1', workItemId = '
     attemptOrdinal: 1, definitionRevision: agg.definitionRevision,
     executionEpoch: agg.control.executionEpoch, globalStopGeneration: 0,
     executionSlot: `${agg.taskId}/${workItemId}/${phase}`, sessionId, requestId: `req-${runId}`,
-    presetId: 'boss-simulator-worker', state, executionTreeSettled: state === 'settled',
+    state, executionTreeSettled: state === 'settled',
     startedAt: now(), endedAt: now(), tokenTotal: null, usageCoverage: 'unknown', knownTokenTotal: 0,
   }
   return { ...agg, runs: { ...agg.runs, [runId]: record } }
@@ -41,7 +41,7 @@ test('DATA-13: 同 ID 修改拒绝;替代产生新 ID 并继承失败计数,旧 
   // 制造一次失败验收历史
   agg = runOn(agg, 'r1')
   agg = runOn(agg, 'r2', 'accept', 's-review')
-  let rep = submitReport(agg, { reportId: 'rep-issues', runId: 'r2', verdict: 'issues', issues: ['a'] })
+  let rep = submitReport(agg, { reportId: 'rep-issues', runId: 'r2', verdict: 'issues', summary: '验收发现问题', coveredCriterionIds: ['c1'], issues: ['a'], evidence: [] })
   assert.ok(rep.ok, rep.message)
   agg = rep.result.aggregate
   assert.equal(agg.workItems.w1.failedAcceptanceCount, 1)
@@ -53,7 +53,8 @@ test('DATA-13: 同 ID 修改拒绝;替代产生新 ID 并继承失败计数,旧 
   assert.equal(agg.workItems.w1.replacedBy, 'w2')
   assert.equal(agg.workItems.w2.failedAcceptanceCount, 1, '失败计数继承')
   assert.equal(agg.workItems.w2.replacesWorkItemId, 'w1')
-  const oldPassBlocked = submitReport(agg, { reportId: 'rep-old', runId: 'r1', verdict: 'ready_for_review' })
+  const oldPassBlocked = submitReport(agg, { reportId: 'rep-old', runId: 'r1', verdict: 'ready_for_review', summary: '历史实施完成', coveredCriterionIds: [], issues: [], evidence: [] })
+  assert.ok(oldPassBlocked.ok)
   assert.equal(oldPassBlocked.result.aggregate.reports['rep-issues'].historical, false)
   // 在途 Run 未核清时替代拒绝
   const withRun = runOn(agg, 'r9', 'implement', 's1', 'w2', 'running')

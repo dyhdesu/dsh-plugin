@@ -40,7 +40,7 @@ function dispatchRun(agg, { runId = 'r1', phase = 'implement', actorRole = 'exec
   assert.ok(perm.ok, perm.message)
   const rec = recordRun(agg, {
     runId, workItemId: 'w1', phase, actorRole, sessionId, requestId: `req-${runId}`,
-    presetId: 'boss-simulator-worker', slotKey: perm.result.slotKey, globalControl: control,
+    slotKey: perm.result.slotKey, globalControl: control,
   })
   assert.ok(rec.ok, rec.message)
   return rec.result.aggregate
@@ -85,7 +85,7 @@ test('DATA-04: 不同 cause 争同一执行槽至多一个有效 Run', async () 
 test('DATA-09: 旧定义 pass 标 historical,不可用于结案', async () => {
   let agg = await makeReadyTask()
   agg = dispatchRun(agg, { runId: 'r1', phase: 'accept', actorRole: 'reviewer', sessionId: 'sr1' })
-  const pass1 = submitReport(agg, { reportId: 'rep1', runId: 'r1', verdict: 'pass', coveredCriterionIds: ['c1'] })
+  const pass1 = submitReport(agg, { reportId: 'rep1', runId: 'r1', verdict: 'pass', summary: '验收通过', coveredCriterionIds: ['c1'], issues: [], evidence: [] })
   assert.ok(pass1.ok, pass1.message)
   const revised = reviseDefinition(pass1.result.aggregate, { definition: { goal: 'g2', acceptanceCriteria: [{ criterionId: 'c1', text: '标准一' }] } })
   assert.ok(revised.ok, revised.message)
@@ -99,9 +99,43 @@ test('DATA-10: 实施 session 自验被拒绝', async () => {
   const marked = markSessionExecutor(agg, { sessionId: 's-exec', runIds: ['r1'] })
   agg = marked.result.aggregate
   agg = dispatchRun(agg, { runId: 'r2', phase: 'accept', actorRole: 'reviewer', sessionId: 's-exec' })
-  const selfAccept = submitReport(agg, { reportId: 'rep2', runId: 'r2', verdict: 'pass' })
+  const selfAccept = submitReport(agg, { reportId: 'rep2', runId: 'r2', verdict: 'pass', summary: '验收通过', coveredCriterionIds: ['c1'], issues: [], evidence: [] })
   assert.equal(selfAccept.ok, false)
   assert.match(selfAccept.message, /自验|相同/)
+})
+
+test('Given 无 sessions 标记但实施 Run 已绑定 When 同 session 提交验收 Then 拒绝自验', async () => {
+  let agg = await makeReadyTask()
+  agg = dispatchRun(agg, { runId: 'implementation', sessionId: 'same' })
+  agg = dispatchRun(agg, { runId: 'review', phase: 'accept', actorRole: 'reviewer', sessionId: 'same' })
+  const result = submitReport(agg, { reportId: 'self', runId: 'review', summary: '自验', verdict: 'pass', coveredCriterionIds: ['c1'] })
+  assert.equal(result.ok, false)
+})
+
+test('Given 一个工作项通过但另一个没有验收 When 结案 Then 拒绝遗漏工作项', async () => {
+  let agg = await makeReadyTask()
+  agg = defineWorkItem(agg, { workItemId: 'w2', title: '第二项', requiredCriterionIds: ['c1'] }).result.aggregate
+  agg = dispatchRun(agg, { runId: 'review', phase: 'accept', actorRole: 'reviewer', sessionId: 'reviewer' })
+  agg = submitReport(agg, { reportId: 'pass1', runId: 'review', summary: '部分通过', verdict: 'pass', coveredCriterionIds: ['c1'] }).result.aggregate
+  assert.equal(closeTask(agg, { passReportId: 'pass1' }).ok, false)
+})
+
+test('Given 验收后又实施修复 When 引用旧 pass 结案 Then 拒绝旧产物报告', async () => {
+  let agg = await makeReadyTask()
+  agg = dispatchRun(agg, { runId: 'review', phase: 'accept', actorRole: 'reviewer', sessionId: 'reviewer' })
+  agg = submitReport(agg, { reportId: 'pass1', runId: 'review', summary: '通过', verdict: 'pass', coveredCriterionIds: ['c1'] }).result.aggregate
+  agg = dispatchRun(agg, { runId: 'fix', phase: 'fix', sessionId: 'fixer' })
+  agg = submitReport(agg, { reportId: 'fixed', runId: 'fix', summary: '修复', verdict: 'ready_for_review' }).result.aggregate
+  assert.equal(closeTask(agg, { passReportId: 'pass1' }).ok, false)
+})
+
+test('Given 有有效 pass 但存在回执未知验收 When 结案 Then 拒绝未核清执行', async () => {
+  let agg = await makeReadyTask()
+  agg = dispatchRun(agg, { runId: 'review', phase: 'accept', actorRole: 'reviewer', sessionId: 'reviewer' })
+  agg = submitReport(agg, { reportId: 'pass1', runId: 'review', summary: '通过', verdict: 'pass', coveredCriterionIds: ['c1'] }).result.aggregate
+  agg = dispatchRun(agg, { runId: 'unknown', phase: 'accept', actorRole: 'reviewer', sessionId: 'another' })
+  agg.runs.unknown.state = 'unknown'
+  assert.equal(closeTask(agg, { passReportId: 'pass1' }).ok, false)
 })
 
 test('DATA-11: 全局停止同 commandId 不重复提升,新 commandId 使旧单项许可失效', () => {

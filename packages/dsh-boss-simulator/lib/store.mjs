@@ -1,47 +1,67 @@
-// 任务存储适配:storageDomain 单域单记录语义的薄封装。
-// handle 形态镜像宿主: get(key) missing 抛错; update(key, fn) 同步读改写。
-export function createTaskStore(handle) {
-  const CONTROL_KEY = 'control'
+import { createGlobalControl } from './core/global-control.mjs'
 
-  async function loadAggregate(taskId) {
+// 存储只接收 DTO,根级时钟在读取和原子迁移回调边界恢复。
+export function createTaskStore(handle, { now = Date.now } = {}) {
+  function withClock(record) {
+    if (record === undefined) return undefined
+    return { ...record, now }
+  }
+
+  async function loadRecord(key) {
     try {
-      return await handle.get(`task/${taskId}`)
+      return await handle.get(key)
     } catch (error) {
-      if (/missing key/.test(String(error?.message))) return undefined
+      if (isMissingKey(error)) return undefined
       throw error
     }
+  }
+
+  async function loadAggregate(taskId) {
+    return withClock(await loadRecord(`task/${taskId}`))
   }
 
   async function saveAggregate(aggregate) {
-    return handle.update(`task/${aggregate.taskId}`, () => aggregate)
+    await handle.put(`task/${aggregate.taskId}`, withoutClock(aggregate))
+    return loadAggregate(aggregate.taskId)
   }
 
   async function updateAggregate(taskId, fn) {
-    return handle.update(`task/${taskId}`, (current) => {
+    await handle.update(`task/${taskId}`, (current) => {
       if (current === undefined) throw new Error(`missing key: task/${taskId}`)
-      return fn(current)
+      return withoutClock(fn(withClock(current)))
     })
+    return loadAggregate(taskId)
+  }
+
+  async function listAggregates() {
+    return Array.from(handle.entries())
+      .filter(([key]) => key.startsWith('task/'))
+      .map(([, record]) => withClock(record))
   }
 
   async function loadControl() {
-    try {
-      return await handle.get(CONTROL_KEY)
-    } catch (error) {
-      if (/missing key/.test(String(error?.message))) {
-        return { globalStopped: false, globalStopGeneration: 0, taskAllows: {} }
-      }
-      throw error
-    }
+    return withClock((await loadRecord('control')) ?? createGlobalControl(now))
   }
 
   async function updateControl(fn) {
-    return updateControlRecord(handle, fn, { globalStopped: false, globalStopGeneration: 0, taskAllows: {} })
+    await updateControlRecord(handle, (current) => withoutClock(fn(withClock(current))), createGlobalControl(now))
+    return loadControl()
   }
 
-  return { loadAggregate, saveAggregate, updateAggregate, loadControl, updateControl }
+  return { loadAggregate, saveAggregate, updateAggregate, listAggregates, loadControl, updateControl }
+}
+
+function withoutClock(record) {
+  const { now, ...dto } = record
+  return dto
 }
 
 const MISSING_KEY = /missing[- ]key/i
+
+function isMissingKey(error) {
+  if (error?.code !== undefined) return error.code === 'missing-key'
+  return MISSING_KEY.test(String(error?.message ?? error?.name))
+}
 
 // 控制记录 RMW:missing-key 才允许以 initial 兜底首写,其余错误原样抛出(防清空既有控制态)
 export async function updateControlRecord(handle, fn, initial) {
@@ -71,7 +91,7 @@ async function updateKeyWithSeed(handle, key, fn, initial) {
   try {
     return await handle.update(key, (current) => fn(current ?? initial))
   } catch (error) {
-    if (!MISSING_KEY.test(String(error?.code ?? error?.name ?? error?.message))) throw error
+    if (!isMissingKey(error)) throw error
     await handle.put(key, fn(initial))
     return handle.get(key)
   }

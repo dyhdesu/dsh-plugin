@@ -52,10 +52,12 @@ const audit = (endpoint, outcome, extra) => {
   console.warn('[dsh-maintain] audit endpoint=' + endpoint + ' outcome=' + outcome + (extra ? ' ' + extra : ''))
 }
 
-// 活跃工作检测:agents/jobs/terminals 全软依赖方法面守卫,缺失或异常即降级放行(fail-open,
-// 不因安全网缺失死锁重启)。terminals 主路径逐 agent 的 realm 作用域解析(PTY 注册表随
-// agent 挂载且 isolate,共享根作用域因 realm 隔离恒缺,仅兜底;无 agent 时服务面
-// 不可见属常态,不计降级);sessions 不作活跃指标;禁止顶层 inject(阻塞装载)。导出仅供测试
+// 活跃工作检测:agents/jobs/terminals 全软依赖方法面守卫,缺失或异常即降级——重启门控
+// fail-open(不因安全网缺失死锁重启),升级门控 fail-closed(检测面缺失拒绝升级)。
+// 0.2.0 实测:terminals 服务对插件 ctx 根与 agent realm 均不可探,面不可见属宿主常态
+// 不计降级,终端归属 agent、agents 计数覆盖 running 期间终端活动;agent 转 idle 后
+// 存活终端不可计数,属已知盲区(宿主能力边界,非本插件可修);sessions 不作活跃指标;
+// 禁止顶层 inject(阻塞装载)。导出仅供测试
 // 降级留痕按服务键进程首见一次:status 每拍重检,不限频会刷屏
 const degradedWarned = new Set()
 

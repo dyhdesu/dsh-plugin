@@ -155,6 +155,8 @@ test('未知命令入口不改，切换失败保持原link', async t => {
   // 入口面按平台语义注入未知形态:win32 未知 shim 内容;POSIX 入口被替换为实体文件(非symlink)
   const posix = process.platform !== 'win32'
   const entryPath = posix ? join(f.prefix, 'bin', 'dsh') : join(f.prefix, 'dsh.cmd')
+  // POSIX 入口是 symlink,writeFile 会跟随链接改写目标;须先摘链接再落实体文件
+  if (posix) await rm(entryPath)
   await writeFile(entryPath, 'custom unrelated launcher')
   const pkg = await f.install('a', '2.0.0')
   await assert.rejects(f.api.activateInstallation(f.layout, pkg, { runningPackage: f.originalPackage }), /入口|shim/)

@@ -53,12 +53,12 @@ test('上游留档判定_ambient放松变异锁', t => {
 })
 
 test('roundtrip判定_旧轮回复不能伪装本轮完成', () => {
-  const base = { composerText: '', userMessage: '回复:anth', currentTurnText: '回复:anth echo-upstream-fixed', hasResponseGroup: true, errors: [] }
+  const base = { composerText: '', userMessage: '回复:anth', currentTurnText: 'echo-upstream-fixed', hasResponseGroup: true, errors: [] }
   assert.equal(judgeRoundtrip(base, '回复:anth'), true)
-  assert.equal(judgeRoundtrip({ ...base, currentTurnText: '回复:anth echo-upstream-fixed', userMessage: '' }, '回复:anth'), false)
-  assert.equal(judgeRoundtrip({ ...base, currentTurnText: '回复:anth echo-upstream-fixed', userMessage: '回复:ok' }, '回复:anth'), false)
-  assert.equal(judgeRoundtrip({ ...base, currentTurnText: '旧轮 echo-upstream-fixed', userMessage: '' }, '回复:anth'), false)
-  assert.equal(judgeRoundtrip({ ...base, currentTurnText: 'echo-upstream-fixed' }, '回复:anth'), false)
+  assert.equal(judgeRoundtrip({ ...base, userMessage: '' }, '回复:anth'), false)
+  assert.equal(judgeRoundtrip({ ...base, userMessage: '回复:ok' }, '回复:anth'), false)
+  // 0.2.1-rc.2 起用户消息不并入 turn 文本,本轮/旧轮绑定改由 wait-roundtrip
+  // 时序判定承担(send 后等待本轮响应组出现才采样),此处不再断言文本包含
   assert.equal(judgeRoundtrip({ ...base, hasResponseGroup: false }, '回复:anth'), false)
   assert.equal(judgeRoundtrip({ ...base, composerText: '仍在输入' }, '回复:anth'), false)
   assert.equal(judgeRoundtrip({ ...base, errors: ['上游失败'] }, '回复:anth'), false)

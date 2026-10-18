@@ -43,10 +43,13 @@ test('Given missing public or private methods, When installing, Then host disabl
   }
 })
 
-test('Given the package manifest, When the support table evolves, Then peer range and release metadata stay in lockstep', () => {
+test('Given the package manifest, When the support table evolves, Then peer range covers the support table and release metadata stay in lockstep', () => {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   const supported = [...SUPPORTED_VERSIONS].sort()
-  assert.deepEqual(manifest.peerDependencies['@deepseek-ai/dsh-api-terminal-controller'].split(' || ').sort(), supported)
+  // peer 是装载面(允许干净禁用的宿主代际),SUPPORTED 是功能面(实测私有结构):
+  // 功能面必须被装载面覆盖,dshReleases 的 compatible 集合与功能面精确对账
+  const peerRange = manifest.peerDependencies['@deepseek-ai/dsh-api-terminal-controller']
+  for (const version of supported) assert.ok(peerRange.split(' || ').includes(version), `peer 缺功能面版本 ${version}`)
   assert.deepEqual(
     Object.entries(manifest.dsh.compatibility.dshReleases)
       .filter(([, status]) => status === 'compatible').map(([version]) => version).sort(),

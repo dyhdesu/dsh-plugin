@@ -8,11 +8,20 @@
     ".": "./src/index.js",
     "./converge": "./src/converge.mjs",
     "./registry": "./src/registry.mjs",
+    "./web": "./src/web-routes.mjs",
+    "./client": "./src/client.js",
     "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
     },
     "hostMin": "0.2.0-rc.1",
     "compatibility": {

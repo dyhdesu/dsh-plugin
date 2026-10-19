@@ -123,6 +123,17 @@ export function apply(ctx, config) {
   // 下一轮收敛重新归位
   ctx.on('tools/change', converge, { global: true })
 
+  // settings 服务动态声明(BDD INV-9):仅用于抑制原生 schemastery 设置节
+  // (auto:false,配置唯一入口 = GUI 卡片);服务缺失只影响节抑制,不影响
+  // 收敛本体。收敛先落定再抑制,避免节注册与抑制交错
+  void ctx.inject(['settings'], (sctx) => {
+    try {
+      sctx.settings.configure({ auto: false }, ctx.fiber)
+    } catch (error) {
+      ctx.logger?.warn?.(`tool-gate: 原生设置节抑制失败(GUI 与原生节并存): ${error?.message ?? error}`)
+    }
+  })
+
   converge()
   // 行退场(禁用/卸载/重载)还原原状:系统回到「没装本包」的世界
   ctx.effect(() => () => restoreAll())

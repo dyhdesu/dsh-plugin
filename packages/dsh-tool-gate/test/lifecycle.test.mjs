@@ -22,6 +22,10 @@ function harness(initialLayers, initialConfig = {}) {
   const logs = { info: [], warn: [] }
   const ctx = {
     get: (name) => (name === 'tools' ? tools : undefined),
+    inject: (targets, fn) => {
+      // 假宿主:声明即回调(真宿主服务在场同形);settings 缺席由消费端兜
+      fn(targets.includes('settings') ? { settings: { configure() {} } } : {})
+    },
     on: (event, handler) => {
       if (!listeners.has(event)) listeners.set(event, [])
       listeners.get(event).push(handler)

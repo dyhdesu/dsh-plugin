@@ -43,6 +43,26 @@ message 记录 tool-addition/tool-removal,dsh-llm 投影层处理会话一致性
   行 fiber 等 tools 服务在场才 apply;apply 内 ctx.get 即时解析早于服务
   可达(真机实证 undefined → 误判干净禁用)。服务缺失 = 行保持未激活 =
   干净禁用。
+- **INV-9 GUI 单一写入口,零桥收敛**:web 行提供状态读(全层工具清单投影)
+  与白名单/enabled 写;写经 settings.replace 落盘行条目 → 主行
+  loader/volatile-update 监听自动收敛,不设刷新桥。web 行只读工具 defer 态
+  (definition 对象跨行共享),不自己收敛。原生 schemastery 设置节经
+  settings.configure({ auto: false }) 抑制(主行动态 ctx.inject(['settings'])
+  声明,settings 缺失只影响节抑制不影响收敛本体),GUI 卡片是唯一配置入口。
+
+## GUI 场景
+
+- **SC-11 状态投影**:GET /api/tool-gate/state 返回 { enabled, allowlist,
+  tools }——tools 按名聚合跨层(出现于 N 层、其中 defer 态层数、是否在
+  白名单、是否未注册),层明细随行。
+- **SC-12 白名单勾选**:POST /api/tool-gate/allowlist(名字数组,清洗:
+  剔非字符串/空串/重复)→ settings.replace 落盘 → 主行收敛;响应回新 state。
+- **SC-13 enabled 开关**:POST /api/tool-gate/enabled → 同上链路。
+- **SC-14 守卫**:写路由跨源 403、方法不符 405、非 JSON 体 400;
+  GET 无守卫(只读)。
+- **SC-15 卡片呈现**:设置页「工具门」分区——enabled 开关(规约 switch
+  形态,tg- 前缀)、工具清单每行开关(勾选 = 白名单)、未注册白名单名警示;
+  写失败显示错误不翻状态。
 
 ## 配置语义
 

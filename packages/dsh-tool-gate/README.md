@@ -15,16 +15,27 @@
   系统回到「没装本包」的世界;重注册顶替的 definition 跳过还原。
 - **干净禁用**:宿主 tools 全局层内部结构不符已知形态时打日志零动作,不崩。
 
-## 配置(设置 → tool-gate 节)
+## 使用(设置 → 工具门)
+
+GUI 卡片是唯一配置入口(原生 schemastery 节已抑制):
+
+- **启用工具门**开关:关 = 全部工具恢复注册原状(全量注入),白名单保留
+- **工具清单**:全部层聚合的工具名列表,每行开关 = 是否进白名单;行尾显示
+  层数与 defer 态;勾选即保存,无需重启
+- 白名单含未注册名时卡片顶部警示
+
+HTTP 面(`/api/tool-gate/*`,GUI 数据通道):`GET /state`、
+`POST /allowlist`、`POST /enabled`。
+
+## 配置(行条目,经 GUI 写)
 
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `allowlist` | `read/edit/write/shell/glob/grep/todo_write/ask_user_question` | 全量注入白名单,精确工具名 |
 | `enabled` | `true` | `false` = 还原全部原状并停止打标(临时停用,不动行) |
 
-白名单含未注册名不阻断,日志 warn 提醒拼错。volatile 字段热改即时收敛
-(`loader/volatile-update`),不重启;新工具注册/重注册由 `tools/change`
-驱动重收敛。
+volatile 字段热改即时收敛(`loader/volatile-update`),不重启;新工具注册/
+重注册由 `tools/change` 驱动重收敛。
 
 ## 局限
 

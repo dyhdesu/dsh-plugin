@@ -58,12 +58,15 @@ message 记录 tool-addition/tool-removal,dsh-llm 投影层处理会话一致性
   (enabled=false 或 collapse=false)→ 原样;请求 tools 任一带
   `deferLoading === true`(toolUpdate capable 路由原生投影保留标)→ 原样;
   请求名 ∩ registry deferred 名为空 → 原对象零拷贝透传。改写一律不可变构造。
-  命中时不剔除而是折叠为名字占位(name 保留,description 换占位引导文案,
-  parameters 置空 schema,不带 deferLoading 键,投影幂等)。
-- **INV-10a 生成端名字可见性**:请求 tools 必须保留 deferred 工具的名字。
-  provider 对 tool call 名按请求 tools 集合校验/锚定(真机实证:剔除后模型
-  对 web_fetch 的调用意图被收敛到语义最近的 web_search,参数被强行套入,
-  静默降级);占位 ~20 token/工具,常量 description 对 prompt cache 稳定。
+  命中时不剔除而是折叠为名字+参数骨架占位(name 保留,description 换占位
+  引导文案,parameters 深剥全部 description 留骨架——键名/类型/required,
+  不带 deferLoading 键,投影幂等)。
+- **INV-10a 生成端名字与参数可见性**:请求 tools 必须保留 deferred 工具的
+  名字与参数骨架。provider 对 tool call 名按请求 tools 集合校验/锚定(真机
+  实证:剔除后模型对 web_fetch 的调用意图被收敛到语义最近的 web_search,
+  参数被强行套入,静默降级);空 schema 则模型生成空参数,工具自身参数
+  校验失败(真机实证:无参数 deferred 工具全部成功,有参数的全部失败)。
+  占位 ~20 token/工具 + 骨架,常量 description 对 prompt cache 稳定。
 - **INV-11 缝上标记即原生信号**:capable 路由的 `projectToolUpdates` 产物保留
   deferLoading 标,降级路由产物已剥标——缝上「见标即透传」零成本区分两类
   路由,不读宿主 modelInfo/compat 内部面。
@@ -105,8 +108,8 @@ message 记录 tool-addition/tool-removal,dsh-llm 投影层处理会话一致性
 - **SC-16 降级路由请求折叠为占位**:registry 有 deferred 名(read 外全部),
   装饰缝收到 options.tools = [read, shell, web_fetch](无标,降级路由剥标
   形态)⇒ 改写产物 tools = [read 原引用, shell 占位, web_fetch 占位],
-  占位 = {name, 占位 description, 空 parameters schema} 且不带 deferLoading
-  键,原数组与新 options 对象均不被变异。
+  占位 = {name, 占位 description, parameters 骨架(深剥 description)} 且
+  不带 deferLoading 键,原数组与新 options 对象均不被变异。
 - **SC-17 capable 路由透传**:options.tools 含 `deferLoading === true` 条目
   ⇒ 原样透传(原生 toolUpdate 投影在管,INV-11)。
 - **SC-18 零命中零拷贝**:请求名 ∩ deferred 名为空 ⇒ 返回原 options 引用

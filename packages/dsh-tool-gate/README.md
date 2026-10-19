@@ -11,13 +11,13 @@
 - **原生链路零干预**:支持 `defer_loading` 的路由(DeepSeek Messages 端)上,
   搜索、激活、会话投影(tool-addition/tool-removal)全部由宿主承担。
 - **降级折叠**:第三方路由(无 defer_loading 能力,宿主剥标全量注入)在官方
-  llm-pi-ai adapter 的请求缝上把 deferred 工具折叠为名字占位(name 保留 +
-  占位引导 description + 空 schema,~20 token/工具),白名单工具原样;
-  provider 按请求 tools 集合校验 tool call 名,占位保住生成端名字可见性
-  (剔除会让调用意图被收敛到语义最近的白名单工具,真机实证);模型经
-  `tool_search` 检索完整定义后以正确名字与参数调用(宿主按名执行 registry
-  完整定义)。capable 路由(请求带 defer 标)与 deepseek 原生 adapter 一律
-  透传。
+  llm-pi-ai adapter 的请求缝上把 deferred 工具折叠为占位(name 保留 +
+  占位引导 description + 参数骨架——键名/类型/required,深剥 description,
+  白名单工具原样;provider 按请求 tools 集合校验 tool call 名与参数 schema,
+  占位保住生成端名字与参数可见性:剔除会让调用意图被收敛到语义最近的白
+  名单工具,空 schema 会让模型发空参数,均真机实证);模型经 `tool_search`
+  检索完整定义后以正确名字与参数调用(宿主按名执行 registry 完整定义)。
+  capable 路由(请求带 defer 标)与 deepseek 原生 adapter 一律透传。
 - **原状还原**:收敛改动以 undo journal 记录,行禁用/卸载按 journal 还原,
   系统回到「没装本包」的世界;重注册顶替的 definition 跳过还原。
 - **干净禁用**:宿主 tools/llm 全局层内部结构不符已知形态时打日志零动作,不崩;

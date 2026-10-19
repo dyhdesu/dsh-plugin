@@ -1,9 +1,11 @@
 // 降级折叠决策(纯函数):缝上请求 tools → 目标 tools(BDD INV-10/11)。
 // 三重透传门:空表原样;任一工具带 deferLoading 标(capable 路由原生投影
 // 产物,见标即透传)→ 原样;与 deferred 名集无交集 → 原引用零拷贝。
-// 命中时折叠为名字占位而非剔除:生成端(API tools 列表)必须可见名字,模型
-// 才能产生正确调用名,宿主按名执行 registry 完整定义;剔除会让模型把调用
-// 意图收敛到语义最近的白名单工具(真机实证:web_fetch → web_search)。
+// 命中时折叠为名字+参数骨架占位而非剔除:生成端(API tools 列表)必须可见
+// 名字与参数骨架,模型才能产生正确调用名并填对参数,宿主按名执行 registry
+// 完整定义;剔除会让模型把调用意图收敛到语义最近的白名单工具(真机实证:
+// web_fetch → web_search),空 schema 会让模型发空参数(真机实证:带参数
+// 工具全部参数校验失败,无参数工具全部成功)。
 // 占位不带 deferLoading 键,投影幂等(值等价)。tool_search 永不入 deferred
 // 名集(隐式白名单由收敛与 deferredNames 读取端共同保证)。
 
@@ -13,9 +15,24 @@ export const TOOL_SEARCH_NAME = 'tool_search'
 // 占位描述常量:值逐请求稳定(prompt cache 友好),引导先检索再调用
 export const DEFERRED_PLACEHOLDER_DESCRIPTION = '延迟加载工具:调用前先用 tool_search 以本工具名作正则检索完整定义与参数说明,再按检索到的 schema 调用。'
 
-/** dsh ToolSchema 最小占位形态(pi-ai 仅消费 name/description/parameters)。 */
-function placeholderOf(name) {
-  return { name, description: DEFERRED_PLACEHOLDER_DESCRIPTION, parameters: { type: 'object', properties: {} } }
+/** 深剥离 schema 的 description 键(骨架投影:键名/类型/required 保留,省 token)。 */
+function stripDescriptions(node) {
+  if (Array.isArray(node)) return node.map(stripDescriptions)
+  if (node === null || typeof node !== 'object') return node
+  const result = {}
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'description') continue
+    result[key] = stripDescriptions(value)
+  }
+  return result
+}
+
+/** dsh ToolSchema 占位形态(pi-ai 消费 name/description/parameters);参数骨架保留,生成端才填得出参数。 */
+function placeholderOf(tool) {
+  const parameters = tool?.parameters && typeof tool.parameters === 'object'
+    ? stripDescriptions(tool.parameters)
+    : { type: 'object', properties: {} }
+  return { name: tool.name, description: DEFERRED_PLACEHOLDER_DESCRIPTION, parameters }
 }
 
 /**
@@ -30,5 +47,5 @@ export function planRequestTools(tools, deferredNames) {
   const folded = tools.filter((tool) => deferredNames.has(tool?.name)).map((tool) => tool.name)
   if (folded.length === 0) return { tools, folded, native: false }
   const foldedSet = new Set(folded)
-  return { tools: tools.map((tool) => (foldedSet.has(tool?.name) ? placeholderOf(tool.name) : tool)), folded, native: false }
+  return { tools: tools.map((tool) => (foldedSet.has(tool?.name) ? placeholderOf(tool) : tool)), folded, native: false }
 }

@@ -64,11 +64,14 @@ const degradedWarned = new Set()
 export function collectActiveWork(ctx) {
   const counts = { agents: 0, jobs: 0, terminals: 0 }
   let detectionAvailable = true
+  const degraded = {}
   const degrade = (key, detail) => {
     detectionAvailable = false
+    // 明细恒收集(409/status 透出供定位),控制台留痕按服务键进程首见一次防刷屏
+    degraded[key] = singleLine(detail)
     if (degradedWarned.has(key)) return
     degradedWarned.add(key)
-    console.warn('[dsh-maintain] 活跃工作检测降级,升级门拒绝/重启门放行(' + key + '): ' + singleLine(detail))
+    console.warn('[dsh-maintain] 活跃工作检测降级,升级门拒绝/重启门放行(' + key + '): ' + degraded[key])
   }
 
   let agentList = []
@@ -146,6 +149,8 @@ export function collectActiveWork(ctx) {
     terminals: counts.terminals,
     total: counts.agents + counts.jobs + counts.terminals,
     detectionAvailable,
+    // 仅降级时非空:键为服务名,值为失败明细,随 status 与 409 透出供定位
+    degraded,
   }
 }
 
@@ -709,10 +714,12 @@ export function apply(ctx, config, dependencies = {}) {
         // 切换前编排器 beforeSwitch 还会做最终核验
         const activeWork = collectActiveWork(ctx)
         if (activeWork.detectionAvailable !== true || activeWork.total > 0) {
-          audit('upgrade', 'rejected', 'reason=active-work total=' + activeWork.total + ' detectionAvailable=' + activeWork.detectionAvailable)
+          // 降级明细随 409 透出:检测面缺失时"哪个面、什么原因"是定位的必要信息
+          const degradedSummary = Object.entries(activeWork.degraded).map(([key, detail]) => key + '(' + detail + ')').join('; ')
+          audit('upgrade', 'rejected', 'reason=active-work total=' + activeWork.total + ' detectionAvailable=' + activeWork.detectionAvailable + (degradedSummary ? ' degraded=' + degradedSummary : ''))
           sendJson(res, 409, {
             error: activeWork.detectionAvailable !== true
-              ? '活跃工作检测不可用,为避免中断任务已拒绝升级;请处理检测面后重试'
+              ? '活跃工作检测不可用,为避免中断任务已拒绝升级;降级面: ' + degradedSummary
               : '存在活跃工作(共 ' + activeWork.total + ' 项:agents ' + activeWork.agents + '/jobs ' + activeWork.jobs + '/terminals ' + activeWork.terminals + '),升级切换会中断它们,请等待完成',
             items: activeWork,
             detectionAvailable: activeWork.detectionAvailable,

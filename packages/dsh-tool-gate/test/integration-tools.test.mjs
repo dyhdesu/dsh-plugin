@@ -52,7 +52,7 @@ test('SC-10 官方投影:deferred 带标,白名单内不带,可见性不变', as
   assert.ok(root.tools.get('read'))
 
   const wire = root.tools.wireSchemas(undefined)
-  assert.deepEqual([...wire.knownNames].sort(), ['read', 'web_search'])
+  assert.deepEqual([...wire.knownNames].sort(), ['read', 'tool_search', 'web_search'])
   assert.ok(wire.schemas.some((schema) => schema.name === 'web_search' && schema.deferLoading === true))
 })
 
@@ -76,4 +76,16 @@ test('SC-5 真宿主重注册:tools/change 驱动重收敛', async () => {
   const replacement = makeTool('web_search')
   root.tools.register(replacement)
   assert.equal(replacement.deferLoading, true)
+})
+
+test('SC-22 真宿主:tool_search 注册于全局层,收敛不打标,退场注销', async () => {
+  const { root, fiber } = await boot(['read', 'web_search'], ['read'])
+  const definition = root.tools.get('tool_search')
+  assert.ok(definition, 'tool_search 应注册于全局层')
+  assert.equal('deferLoading' in definition, false)
+  const executed = await definition.execute({ pattern: '^web' }, {})
+  assert.ok(executed.text.includes('web_search'))
+  assert.equal(executed.count, 1)
+  await fiber.dispose()
+  assert.ok(!root.tools.get('tool_search'), '行退场后 tool_search 应注销')
 })

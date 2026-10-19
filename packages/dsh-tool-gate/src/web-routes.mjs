@@ -6,6 +6,7 @@
 
 import { mountRoutes } from './api.mjs'
 import { toolLayersOf } from './registry.mjs'
+import { TOOL_SEARCH_NAME } from './fallback.mjs'
 
 export const name = 'tool-gate/web'
 
@@ -22,6 +23,7 @@ function readSection(settings) {
   return {
     allowlist: Array.isArray(value.allowlist) ? value.allowlist.filter((name) => typeof name === 'string') : undefined,
     enabled: value.enabled === false ? false : undefined,
+    collapse: value.collapse === false ? false : undefined,
   }
 }
 
@@ -48,9 +50,14 @@ export function buildFaces(settings, toolsStore) {
     const allowlist = section.allowlist ?? []
     return {
       enabled: section.enabled ?? true,
+      collapse: section.collapse ?? true,
       allowlist,
       unknownAllowlisted: allowlist.filter((name) => !registered.has(name)),
-      tools: tools.map((tool) => ({ ...tool, inAllowlist: allowlist.includes(tool.name) })),
+      tools: tools.map((tool) => ({
+        ...tool,
+        inAllowlist: allowlist.includes(tool.name),
+        implicit: tool.name === TOOL_SEARCH_NAME,
+      })),
     }
   }
   return {
@@ -63,6 +70,11 @@ export function buildFaces(settings, toolsStore) {
     async updateEnabled(enabled) {
       const current = readSection(settings)
       await settings.replace(SECTION_NS, { ...current, enabled })
+      return readState()
+    },
+    async updateCollapse(collapse) {
+      const current = readSection(settings)
+      await settings.replace(SECTION_NS, { ...current, collapse })
       return readState()
     },
   }

@@ -28,10 +28,12 @@ export function planLayer(names, definitionOf, allowed) {
  * 全层决策汇总:逐层 planLayer,附白名单未知名(以全部层名字并集为注册全集)。
  * @param {{ key: string, names: Function, definitionOf: Function }[]} layers
  * @param {string[]} allowlist 白名单
+ * @param {string[]} [implicitAllow] 隐式白名单(如 tool_search,INV-12),并入 allowed 判定
  * @returns {{ perLayer: { key: string, toDefer: string[], toClear: string[] }[], unknownAllowlisted: string[] }}
  */
-export function planConvergence(layers, allowlist) {
+export function planConvergence(layers, allowlist, implicitAllow = []) {
   const allowed = new Set(allowlist)
+  for (const name of implicitAllow) allowed.add(name)
   const registered = new Set()
   for (const layer of layers) for (const name of layer.names()) registered.add(name)
   const perLayer = layers.map((layer) => ({ key: layer.key, ...planLayer(layer.names(), layer.definitionOf, allowed) }))

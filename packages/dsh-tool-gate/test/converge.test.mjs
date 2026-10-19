@@ -53,3 +53,10 @@ test('planConvergence 空白名单 = 全层全部 defer', () => {
   assert.deepEqual(plan.perLayer, [{ key: 'agent#1', toDefer: ['a', 'b'], toClear: [] }])
   assert.deepEqual(plan.unknownAllowlisted, [])
 })
+
+test('planConvergence 隐式白名单:tool_search 不进 toDefer 也不进未知名(SC-22)', () => {
+  const [globalNames, globalOf] = defs({ tool_search: { name: 'tool_search' }, web: { name: 'web' } })
+  const plan = planConvergence([{ key: 'global', names: globalNames, definitionOf: globalOf }], [], ['tool_search'])
+  assert.deepEqual(plan.perLayer, [{ key: 'global', toDefer: ['web'], toClear: [] }])
+  assert.deepEqual(plan.unknownAllowlisted, [])
+})

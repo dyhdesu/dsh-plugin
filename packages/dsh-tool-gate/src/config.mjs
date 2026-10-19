@@ -20,6 +20,7 @@ export const DEFAULT_ALLOWLIST = Object.freeze([
 export const Config = z.object({
   allowlist: z.array(z.string()).default([...DEFAULT_ALLOWLIST]).volatile(),
   enabled: z.boolean().default(true).volatile(),
+  collapse: z.boolean().default(true).volatile(),
 })
 
 // 字段类型契约(落盘坏值防御的对账依据):设置写路径可能把 volatile 字段以
@@ -28,6 +29,7 @@ export const Config = z.object({
 const FIELD_TYPES = {
   allowlist: 'array',
   enabled: 'boolean',
+  collapse: 'boolean',
 }
 
 function sanitizeConfigEntry(entry) {

@@ -14,6 +14,7 @@ window.__ModuleLoader__.load({
       state: '/api/tool-gate/state',
       allowlist: '/api/tool-gate/allowlist',
       enabled: '/api/tool-gate/enabled',
+      collapse: '/api/tool-gate/collapse',
     }
 
     async function api(path, body) {
@@ -104,21 +105,32 @@ window.__ModuleLoader__.load({
           }),
           h('span', null, '启用工具门'),
           h('span', { className: 'tg-hint' }, '关闭后全部工具恢复注册原状(全量注入),白名单保留')),
-        h('div', { className: 'tg-hint' }, '白名单内的工具全量注入模型上下文;其余工具按需激活(DeepSeek 服务端搜索),不常驻上下文。开关即保存。'),
+        h('div', { className: 'tg-row' },
+          h(Switch, {
+            checked: state.collapse !== false && state.enabled,
+            disabled: busy || !state.enabled,
+            label: '降级折叠',
+            onChange: (collapse) => commit(api(API.collapse, { collapse })),
+          }),
+          h('span', null, '降级折叠(第三方路由)'),
+          h('span', { className: 'tg-hint' }, state.enabled ? 'DeepSeek 原生路由之外,请求折叠为白名单 + tool_search,模型按需检索定义' : '工具门关闭时不生效')),
+        h('div', { className: 'tg-hint' }, '白名单内的工具全量注入模型上下文;其余工具延迟加载(DeepSeek 原生路由走服务端搜索,第三方路由走本地降级折叠)。开关即保存。'),
         state.unknownAllowlisted.length > 0
           ? h('div', { className: 'tg-warn' }, `白名单含未注册工具名(拼错?): ${state.unknownAllowlisted.join(', ')}`)
           : null,
         h('div', { className: 'tg-tools' },
-          state.tools.map((tool) => h('div', { className: `tg-tool${state.enabled && !tool.inAllowlist ? ' tg-tool--off' : ''}`, key: tool.name },
+          state.tools.map((tool) => h('div', { className: `tg-tool${state.enabled && !tool.inAllowlist && !tool.implicit ? ' tg-tool--off' : ''}`, key: tool.name },
             h(Switch, {
               checked: tool.inAllowlist,
-              disabled: busy,
+              disabled: busy || tool.implicit,
               label: `白名单 ${tool.name}`,
               onChange: (on) => toggleTool(tool, on),
             }),
             h('span', { className: 'tg-tool__name' }, tool.name),
             h('span', { className: 'tg-tool__meta' },
-              tool.layers > 1 ? `${tool.layers} 层 · defer ${tool.deferredLayers}` : (tool.deferredLayers > 0 ? 'defer' : '全量'))))),
+              tool.implicit
+                ? '折叠入口(常驻)'
+                : (tool.layers > 1 ? `${tool.layers} 层 · defer ${tool.deferredLayers}` : (tool.deferredLayers > 0 ? 'defer' : '全量')))))),
         error !== undefined ? h('div', { role: 'alert', className: 'tg-error' }, error) : null)
     }
 

@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { DEFERRED_PLACEHOLDER_DESCRIPTION } from '../src/fallback.mjs'
 import { apply } from '../src/index.js'
 
 // 假宿主:全局层 + per-agent scoped 层 + 行 ctx(on/effect/logger/get)。
@@ -8,14 +9,23 @@ function harness(initialLayers, initialConfig = {}) {
   const globalData = new Map(Object.entries(initialLayers.global ?? {}))
   const scoped = new Map()
   for (const [key, defs] of Object.entries(initialLayers.scoped ?? {})) scoped.set(key, { tools: { data: new Map(Object.entries(defs)) } })
-  const tools = { layers: { global: { tools: { data: globalData } }, scoped } }
+  const registered = new Map()
+  const tools = {
+    layers: { global: { tools: { data: globalData } }, scoped },
+    register: (definition) => {
+      registered.set(definition.name, definition)
+      return () => registered.delete(definition.name)
+    },
+  }
   const current = {
     allowlist: initialConfig.allowlist ?? ['read'],
     enabled: initialConfig.enabled ?? true,
+    collapse: initialConfig.collapse ?? true,
   }
   const config = {
     allowlist: { get: () => [...current.allowlist] },
     enabled: { get: () => current.enabled },
+    collapse: { get: () => current.collapse },
   }
   const listeners = new Map()
   const effects = []
@@ -23,14 +33,26 @@ function harness(initialLayers, initialConfig = {}) {
   const ctx = {
     get: (name) => (name === 'tools' ? tools : undefined),
     inject: (targets, fn) => {
-      // 假宿主:声明即回调(真宿主服务在场同形);settings 缺席由消费端兜
-      fn(targets.includes('settings') ? { settings: { configure() {} } } : {})
+      // 假宿主:声明即回调(真宿主服务在场同形);settings/llm 缺席由消费端兜
+      const services = {
+        on: (event, handler) => {
+          if (!listeners.has(event)) listeners.set(event, [])
+          listeners.get(event).push(handler)
+        },
+      }
+      if (targets.includes('settings')) services.settings = { configure() {} }
+      if (targets.includes('llm')) services.llm = initialConfig.llm
+      fn(services)
     },
     on: (event, handler) => {
       if (!listeners.has(event)) listeners.set(event, [])
       listeners.get(event).push(handler)
     },
-    effect: (factory) => effects.push(factory),
+    // 真宿主语义:effect 工厂即时执行,产物(注销器)登记到行退场
+    effect: (factory) => {
+      const dispose = factory()
+      effects.push(() => { dispose?.() })
+    },
     logger: {
       info: (message) => logs.info.push(message),
       warn: (message) => logs.warn.push(message),
@@ -40,6 +62,7 @@ function harness(initialLayers, initialConfig = {}) {
     tools,
     current,
     logs,
+    registered,
     definitionOf: (layerKey, name) => (layerKey === 'global' ? globalData : scoped.get(layerKey).tools.data).get(name),
     addAgentLayer: (key, defs) => {
       scoped.set(key, { tools: { data: new Map(Object.entries(defs)) } })
@@ -173,4 +196,82 @@ test('重复收敛幂等:同一目标态反复 emit 不产生重复副作用', (
   h.emit('tools/change')
   assert.equal(convergenceLogs(), 1)
   assert.equal(h.definitionOf('global', 'web').deferLoading, true)
+})
+
+test('SC-22 tool_search 注册与隐式白名单:收敛不打标,退场注销', () => {
+  const h = harness({ global: { read: { name: 'read' }, web: { name: 'web' } } }, { allowlist: ['read'] })
+  h.applyRow()
+  assert.ok(h.registered.has('tool_search'))
+  assert.equal(h.definitionOf('global', 'web').deferLoading, true)
+  h.dispose()
+  assert.equal(h.registered.has('tool_search'), false)
+})
+
+test('SC-22 收敛不打标 tool_search(白名单外仍保持清标)', () => {
+  const h = harness({ global: { read: { name: 'read' }, tool_search: { name: 'tool_search' } } }, { allowlist: ['read'] })
+  h.applyRow()
+  assert.equal('deferLoading' in h.definitionOf('global', 'tool_search'), false)
+  assert.equal(h.definitionOf('global', 'read').deferLoading, undefined)
+})
+
+test('SC-19 llm 缺席:降级折叠 warn 禁用,打标不受影响', () => {
+  const h = harness({ global: { read: { name: 'read' }, web: { name: 'web' } } })
+  h.applyRow()
+  assert.ok(h.logs.warn.some((message) => message.includes('降级折叠禁用')))
+  assert.equal(h.definitionOf('global', 'web').deferLoading, true)
+})
+
+function makeLlm(piAdapter, dsAdapter) {
+  return {
+    adapters: new Map([
+      ['pi', { provider: { id: 'pi' }, adapter: piAdapter }],
+      ['ds', { provider: { id: 'ds' }, adapter: dsAdapter }],
+    ]),
+    directory: new Map([
+      ['pi', { settingsNs: 'llm-pi-ai', provider: 'pi' }],
+      ['ds', { settingsNs: 'llm-deepseek', provider: 'ds' }],
+    ]),
+  }
+}
+
+// 每次新建类:方法落原型,patch 不被自有属性遮蔽;类间原型隔离防串扰
+function makeAdapterClass(calls) {
+  return class Adapter {
+    streamWithSnapshot(options) {
+      calls.push(options)
+      return 'stream'
+    }
+  }
+}
+
+test('SC-16 llm 在场:pi-ai adapter 改写生效,deepseek 原生不 patch', () => {
+  const piCalls = []
+  const dsCalls = []
+  const piAdapter = new (makeAdapterClass(piCalls))()
+  const dsAdapter = new (makeAdapterClass(dsCalls))()
+  const h = harness(
+    { global: { read: { name: 'read' }, web: { name: 'web' } } },
+    { allowlist: ['read'], llm: makeLlm(piAdapter, dsAdapter) },
+  )
+  h.applyRow()
+  piAdapter.streamWithSnapshot({ tools: [{ name: 'read' }, { name: 'web' }] }, {})
+  // 折叠为名字占位而非剔除:名字保留(生成端可见),形态为占位定义
+  assert.deepEqual(piCalls[0].tools.map((tool) => tool.name), ['read', 'web'])
+  assert.equal(piCalls[0].tools[0].name, 'read')
+  assert.deepEqual(piCalls[0].tools[1], { name: 'web', description: DEFERRED_PLACEHOLDER_DESCRIPTION, parameters: { type: 'object', properties: {} } })
+  dsAdapter.streamWithSnapshot({ tools: [{ name: 'web' }] }, {})
+  assert.deepEqual(dsCalls[0].tools.map((tool) => tool.name), ['web'])
+})
+
+test('SC-19 collapse=false:门关全量透传(打标维持)', () => {
+  const piCalls = []
+  const piAdapter = new (makeAdapterClass(piCalls))()
+  const h = harness(
+    { global: { read: { name: 'read' }, web: { name: 'web' } } },
+    { allowlist: ['read'], collapse: false, llm: makeLlm(piAdapter, new (makeAdapterClass([]))()) },
+  )
+  h.applyRow()
+  assert.equal(h.definitionOf('global', 'web').deferLoading, true)
+  piAdapter.streamWithSnapshot({ tools: [{ name: 'read' }, { name: 'web' }] }, {})
+  assert.deepEqual(piCalls[0].tools.map((tool) => tool.name), ['read', 'web'])
 })

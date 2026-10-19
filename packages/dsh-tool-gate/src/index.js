@@ -1,9 +1,11 @@
-// tool-gate 主行入口(apply 型):白名单 → 全部工具层 deferLoading 声明式收敛。
+// tool-gate 主行入口(apply 型):白名单 → 全部工具层 deferLoading 声明式收敛,
+// 外加降级折叠(BDD INV-10):官方 llm-pi-ai 行 adapter 原型缝上,把 deferred
+// 工具从请求 tools 中剔除(不支持 defer_loading 的路由宿主会剥标全量注入,
+// 折叠在缝上自实现;capable 路由见标透传,deepseek 原生行不 patch)。
 //
-// 不 provide 服务、不注册工具、不拦截执行(BDD INV-5):deferred 机制全部
-// 由宿主原生链路承担(wireSchemas 投影 → API defer_loading → 服务端按需
-// 搜索激活,agent-loop/dsh-llm 处理会话一致性)。打标/清标只改 definition
-// 的 deferLoading 字段,schema 投影每请求实时读对象,无需 emit(INV-3)。
+// 折叠入口工具 tool_search 经 defineTool 注册于全局层(effect 注销),收敛视
+// 其为隐式白名单成员(INV-12);模型经它检索定义文本后直接调用,宿主按名
+// 执行,与请求 tools 列表无关。
 //
 // 收敛面 = 全局层 + 全部 per-agent scope 层(宿主 0.2 模型可见工具多注册在
 // agent 面,全局层近乎恒空,真机实证);scoped 层随 agent 动态生灭,每轮
@@ -21,6 +23,9 @@
 import { toolLayersOf } from './registry.mjs'
 import { planConvergence } from './converge.mjs'
 import { resolveConfigStrict, unwrapConfig } from './config.mjs'
+import { TOOL_SEARCH_NAME, planRequestTools } from './fallback.mjs'
+import { buildSearchTool } from './tool-search.mjs'
+import { sweepCollapseAdapters } from './decorator.mjs'
 
 export const name = 'tool-gate'
 
@@ -35,7 +40,7 @@ export { Config } from './config.mjs'
 /**
  * 主行 apply。
  * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {object|undefined} config 行 Config(allowlist/enabled,volatile ref 容器)
+ * @param {object|undefined} config 行 Config(allowlist/enabled/collapse,volatile ref 容器)
  */
 export function apply(ctx, config) {
   // inject ['tools'] 已门控服务在场;全局层内部面(ToolRuntime 升级即可能
@@ -89,7 +94,7 @@ export function apply(ctx, config) {
       return
     }
     const layers = store.layers()
-    const { perLayer, unknownAllowlisted } = planConvergence(layers, allowlist)
+    const { perLayer, unknownAllowlisted } = planConvergence(layers, allowlist, [TOOL_SEARCH_NAME])
     let deferred = 0
     let cleared = 0
     for (const plan of perLayer) {
@@ -115,6 +120,62 @@ export function apply(ctx, config) {
       ctx.logger?.info?.(`tool-gate: 收敛 defer+${deferred} clear-${cleared} 层 ${layers.length} 白名单 ${allowlist.length} 项`)
     }
   }
+
+  // tool_search 注册(折叠入口,隐式白名单 INV-12):行退场随 effect 注销,
+  // 系统回到「没装本包」的世界;register 面缺失(宿主漂移)只损失折叠入口,
+  // 打标收敛不受影响
+  const searchTool = buildSearchTool(() => store.layers())
+  const toolsService = ctx.get('tools')
+  if (typeof toolsService?.register === 'function') {
+    ctx.effect(() => toolsService.register(searchTool), 'tool-gate tool_search')
+  } else {
+    ctx.logger?.warn?.('tool-gate: tools.register 面缺失,tool_search 未注册(降级折叠入口不可用)')
+  }
+  // ---- 降级折叠(INV-10):llm 服务软依赖,缺失 = 只打标不折叠 ----
+
+  /** registry 现读 deferred 名集(层 definition.deferLoading === true)。 */
+  function deferredNames() {
+    const names = new Set()
+    for (const layer of store.layers()) {
+      for (const name of layer.names()) {
+        if (name === TOOL_SEARCH_NAME) continue
+        if (layer.definitionOf(name)?.deferLoading === true) names.add(name)
+      }
+    }
+    return names
+  }
+
+  // 折叠日志按折叠名集签名去重(逐请求常量名集只记一次)
+  let lastFoldedKey = ''
+  const rewrite = (options) => {
+    const { enabled, collapse } = readConfig()
+    if (!enabled || !collapse) return options
+    const plan = planRequestTools(options?.tools, deferredNames())
+    if (plan.folded.length === 0) return options
+    const signature = plan.folded.join(',')
+    if (signature !== lastFoldedKey) {
+      lastFoldedKey = signature
+      ctx.logger?.info?.(`tool-gate: 降级折叠为占位 ${plan.folded.length} 工具(${signature})`)
+    }
+    return { ...options, tools: plan.tools }
+  }
+
+  void ctx.inject(['llm'], (lctx) => {
+    const llm = lctx.llm
+    if (!(llm?.adapters instanceof Map) || !(llm.directory instanceof Map)) {
+      ctx.logger?.warn?.('tool-gate: 宿主 llm 服务形态不符,降级折叠禁用(打标收敛不受影响)')
+      return
+    }
+    const isActive = () => {
+      const current = readConfig()
+      return current.enabled && current.collapse
+    }
+    const sweep = () => sweepCollapseAdapters(llm, rewrite, isActive)
+    const swept = sweep()
+    if (swept === 0) ctx.logger?.warn?.('tool-gate: apply 时无 pi-ai adapter(等 llm/adapters-updated 兜底)')
+    else ctx.logger?.info?.(`tool-gate: 降级折叠就绪(adapter ${swept})`)
+    lctx.on('llm/adapters-updated', sweep, { global: true })
+  })
 
   // 白名单热改:volatile-only 变更宿主换 ref 不重挂行,本行 fiber 自身 emit
   // 的事件现读 ref 重收敛(shell-select volatile 补偿同构)

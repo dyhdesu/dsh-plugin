@@ -115,6 +115,20 @@ export function mountRoutes(ctx, faces) {
         })
       },
     },
+    {
+      path: `${API_ROOT}/collapse`,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'method not allowed' })
+          return
+        }
+        await writeRoute(req, res, async (body) => {
+          if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new Error('请求体必须是对象')
+          if (typeof body.collapse !== 'boolean') throw new Error('collapse 须为布尔')
+          sendJson(res, 200, await faces.updateCollapse(body.collapse))
+        })
+      },
+    },
   ]
   for (const item of routes) {
     ctx.effect(() => webServer.register({ kind: 'exact', path: item.path, handler: item.handler }), `tool-gate ${item.path}`)

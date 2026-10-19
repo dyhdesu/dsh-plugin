@@ -1,19 +1,16 @@
-// 收敛决策(纯函数):白名单 → 全局层每个工具的目标 defer 态。
+// 收敛决策(纯函数):白名单 → 单个工具层的目标 defer 态。
 // 白名单是唯一事实源:白名单内清标(覆盖插件作者自带声明,用户意图优先),
 // 白名单外打标;与现状相同的名不出现在决策里(幂等,只动差异)。
+// 全局层与各 per-agent scope 层同规则逐层收敛,调用方组合。
 
 /**
- * 计算一轮收敛决策。
- * @param {string[]} names 全局层当前工具名清单
+ * 计算一层的收敛决策。
+ * @param {string[]} names 层内当前工具名清单
  * @param {(name: string) => object|undefined} definitionOf 名 → definition
- * @param {string[]} allowlist 白名单(精确名匹配)
- * @returns {{ toDefer: string[], toClear: string[], unknownAllowlisted: string[] }}
- *   toDefer = 需打标(白名单外且当前非 true);toClear = 需清标(白名单内且
- *   当前为 true,不论谁打的);unknownAllowlisted = 白名单内未注册名
+ * @param {Set<string>} allowed 白名单集合
+ * @returns {{ toDefer: string[], toClear: string[] }}
  */
-export function planConvergence(names, definitionOf, allowlist) {
-  const registered = new Set(names)
-  const allowed = new Set(allowlist)
+export function planLayer(names, definitionOf, allowed) {
   const toDefer = []
   const toClear = []
   for (const name of names) {
@@ -24,6 +21,19 @@ export function planConvergence(names, definitionOf, allowlist) {
       toDefer.push(name)
     }
   }
-  const unknownAllowlisted = allowlist.filter((name) => !registered.has(name))
-  return { toDefer, toClear, unknownAllowlisted }
+  return { toDefer, toClear }
+}
+
+/**
+ * 全层决策汇总:逐层 planLayer,附白名单未知名(以全部层名字并集为注册全集)。
+ * @param {{ key: string, names: Function, definitionOf: Function }[]} layers
+ * @param {string[]} allowlist 白名单
+ * @returns {{ perLayer: { key: string, toDefer: string[], toClear: string[] }[], unknownAllowlisted: string[] }}
+ */
+export function planConvergence(layers, allowlist) {
+  const allowed = new Set(allowlist)
+  const registered = new Set()
+  for (const layer of layers) for (const name of layer.names()) registered.add(name)
+  const perLayer = layers.map((layer) => ({ key: layer.key, ...planLayer(layer.names(), layer.definitionOf, allowed) }))
+  return { perLayer, unknownAllowlisted: allowlist.filter((name) => !registered.has(name)) }
 }

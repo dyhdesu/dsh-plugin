@@ -33,6 +33,16 @@ message 记录 tool-addition/tool-removal,dsh-llm 投影层处理会话一致性
 - **INV-6 非 deferLoading 能力宿主不受影响**:工具执行、权限、guard、
   presentCall/presentResult 均不读 `deferLoading`,本包不触碰 definition
   其余字段。
+- **INV-7 收敛面 = 全局层 + 全部 per-agent scope 层**:宿主 0.2 起模型可见
+  工具多注册在 agent 面(真机实证:全局层近乎恒空,scoped 层 20+ 工具),
+  收敛每轮现读层清单,scoped 层随 agent 动态生灭,新层首收敛由其注册触发
+  的 tools/change 驱动。层标识用层数据表(Map)对象引用直接作 journal 键,
+  禁止字符串化(scope 键对象 String 化全部坍缩 '[object Object]',层间
+  lookup 串层,真机实证 read_image/pwsh 漏打)。
+- **INV-8 行模块 inject 声明门控**:`export const inject = ['tools']` 使
+  行 fiber 等 tools 服务在场才 apply;apply 内 ctx.get 即时解析早于服务
+  可达(真机实证 undefined → 误判干净禁用)。服务缺失 = 行保持未激活 =
+  干净禁用。
 
 ## 配置语义
 

@@ -1,0 +1,7 @@
+# 全局层工具白名单延迟加载;不做工具摘除、不做行禁用、不注册任何工具。
+# deferred 机制全部由宿主原生链路承担(deferLoading → API defer_loading →
+# 服务端按需搜索激活),本行只做白名单到 deferLoading 字段的声明式收敛。
+
+- insert:
+    - id: tool-gate
+      name: '@mzzsfy/dsh-tool-gate'

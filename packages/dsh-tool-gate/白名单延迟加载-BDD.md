@@ -108,8 +108,12 @@ message 记录 tool-addition/tool-removal,dsh-llm 投影层处理会话一致性
 - **SC-16 降级路由请求折叠为占位**:registry 有 deferred 名(read 外全部),
   装饰缝收到 options.tools = [read, shell, web_fetch](无标,降级路由剥标
   形态)⇒ 改写产物 tools = [read 原引用, shell 占位, web_fetch 占位],
-  占位 = {name, 占位 description, parameters 骨架(深剥 description)} 且
+  占位 = {name, 占位 description, parameters 骨架(深剥 schema 说明)} 且
   不带 deferLoading 键,原数组与新 options 对象均不被变异。
+- **SC-16b 参数名不被误剥**:properties 下键名是参数名而非 schema 说明
+  (subagent 的参数恰名 description)⇒ 骨架投影保留参数键名,仅剥参数
+  定义内部的 description;按键名误剥会让模型端 schema 缺参数定义,
+  required 项永远空缺报错(真机实证:subagent 九连报 missing description)。
 - **SC-17 capable 路由透传**:options.tools 含 `deferLoading === true` 条目
   ⇒ 原样透传(原生 toolUpdate 投影在管,INV-11)。
 - **SC-18 零命中零拷贝**:请求名 ∩ deferred 名为空 ⇒ 返回原 options 引用

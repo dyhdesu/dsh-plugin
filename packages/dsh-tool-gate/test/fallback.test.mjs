@@ -37,6 +37,31 @@ test('SC-16 降级折叠投影:deferred 折叠为名字+参数骨架占位,白�
   assert.equal(tools[2].parameters.properties.url.description, '目标 URL')
 })
 
+test('SC-16b 参数名为 description 不被误剥:properties 键名是参数名,非 schema 说明', () => {
+  const subagent = {
+    name: 'subagent',
+    description: '委派子代理',
+    parameters: {
+      type: 'object',
+      properties: {
+        description: { type: 'string', description: '任务短描述' },
+        prompt: { type: 'string', description: '完整任务' },
+      },
+      required: ['description', 'prompt'],
+    },
+  }
+  const plan = planRequestTools([subagent], new Set(['subagent']))
+  // 参数键名保留,只剥参数定义内部的说明
+  assert.deepEqual(plan.tools[0].parameters, {
+    type: 'object',
+    properties: {
+      description: { type: 'string' },
+      prompt: { type: 'string' },
+    },
+    required: ['description', 'prompt'],
+  })
+})
+
 test('SC-16a 折叠幂等:占位输入再投影值等价', () => {
   const tools = [{ name: 'web_fetch', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } }]
   const first = planRequestTools(tools, new Set(['web_fetch']))

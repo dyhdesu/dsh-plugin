@@ -15,13 +15,22 @@ export const TOOL_SEARCH_NAME = 'tool_search'
 // 占位描述常量:值逐请求稳定(prompt cache 友好),引导先检索再调用
 export const DEFERRED_PLACEHOLDER_DESCRIPTION = '延迟加载工具:调用前先用 tool_search 以本工具名作正则检索完整定义与参数说明,再按检索到的 schema 调用。'
 
-/** 深剥离 schema 的 description 键(骨架投影:键名/类型/required 保留,省 token)。 */
+/**
+ * 深剥离 schema 说明(description 键),保留参数骨架(键名/类型/required)。
+ * properties 下键名是参数名而非说明字段(真机实证:subagent 的参数
+ * description 被按键名误剥 → 模型端 schema 缺该参数 → 空缺报错),特判
+ * 保留键名、仅对参数定义递归。
+ */
 function stripDescriptions(node) {
   if (Array.isArray(node)) return node.map(stripDescriptions)
   if (node === null || typeof node !== 'object') return node
   const result = {}
   for (const [key, value] of Object.entries(node)) {
     if (key === 'description') continue
+    if (key === 'properties' && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      result[key] = Object.fromEntries(Object.entries(value).map(([name, definition]) => [name, stripDescriptions(definition)]))
+      continue
+    }
     result[key] = stripDescriptions(value)
   }
   return result

@@ -5,6 +5,7 @@
 // INV-9 零桥)。webServer 缺席(headless)时行不激活,不影响收敛本体。
 
 import { mountRoutes } from './api.mjs'
+import { toolLayersOf } from './registry.mjs'
 
 export const name = 'tool-gate/web'
 
@@ -69,6 +70,13 @@ export function buildFaces(settings, toolsStore) {
 
 /** 行入口:webServer/settings/tools 已由 inject 门控就绪。 */
 export function apply(ctx) {
-  mountRoutes(ctx, buildFaces(ctx.get('settings'), ctx.get('tools')))
+  // tools 服务经 registry 投影成层读取器(裸服务无 layers 面,直接传即
+  // readState 每调必抛 → 路由 400)
+  const store = toolLayersOf(ctx.get('tools'))
+  if (store === undefined) {
+    ctx.logger?.warn?.('tool-gate/web: ctx.tools 层结构与已知形态不符,状态路由跳过(收敛不受影响)')
+    return
+  }
+  mountRoutes(ctx, buildFaces(ctx.get('settings'), store))
 }
 

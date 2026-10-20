@@ -17,3 +17,12 @@ test('client.js 数据刷新走变更长轮询,禁数据轮询 interval', () => 
   const intervalUses = [...source.matchAll(/setInterval\((\w+)/g)].map((m) => m[1])
   assert.deepEqual(intervalUses, ['judge'], '唯一合法 interval 为页签判定 judge 兜底')
 })
+
+test('client.js 长轮询须带防风暴限频:未挂起响应按忙时间隙续连,广播合并节流', () => {
+  const source = readFileSync(join(root, 'src', 'client.js'), 'utf8')
+  assert.match(source, /CHANGES_BUSY_GAP_MS/, '缺忙时间隙常量(变更密集时 changes 紧密重连风暴)')
+  assert.match(source, /CHANGES_HUNG_MIN_MS/, '缺挂起判定阈值(区分真挂起与立即返回)')
+  assert.match(source, /hung \? 0 : CHANGES_BUSY_GAP_MS/, '续连须按挂起与否区分立即续连与限频')
+  assert.match(source, /CHANGES_NOTIFY_MERGE_MS/, '缺广播合并节流(高频写入放大订阅者全量重拉)')
+  assert.doesNotMatch(source, /changesSleep\(0,/, '禁止无条件立即续连(变更密集时退化为紧密循环)')
+})

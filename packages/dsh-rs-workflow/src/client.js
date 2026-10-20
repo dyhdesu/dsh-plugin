@@ -14,10 +14,15 @@ window.__ModuleLoader__.load({
     const VIEW_ID = 'rsww-flow'
     const SETTLED_COUNT = 8
     const ARMED_TIMEOUT_MS = 3 * 1000
-    // 长轮询:失败重连退避指数增长至上限;请求超时须大于服务端挂起上限(25s)
+    // 长轮询:失败重连退避指数增长至上限;请求超时须大于服务端挂起上限(25s)。
+    // 变更密集防风暴:响应未经历挂起(服务端因版本已超前立即返回)时按忙时间隙限频续连;
+    // 广播合并节流,窗口内多次变更只触发一轮订阅者重拉
     const CHANGES_RETRY_MIN_MS = 2 * 1000
     const CHANGES_RETRY_MAX_MS = 30 * 1000
     const CHANGES_REQUEST_TIMEOUT_MS = 30 * 1000
+    const CHANGES_HUNG_MIN_MS = 5 * 1000
+    const CHANGES_BUSY_GAP_MS = 1 * 1000
+    const CHANGES_NOTIFY_MERGE_MS = 300
     const CHANGES_TOKEN = 'rsww:changes-poll'
 
     const NAV_ICON = { '若水工作流': 'flow', 'dsh-rs-workflow': 'flow' }
@@ -68,21 +73,31 @@ window.__ModuleLoader__.load({
       }
       const advanced = changesCursor !== null && version > changesCursor
       changesCursor = version
-      if (advanced) for (const listener of [...changesListeners]) listener()
+      if (advanced) notifyAdvanced()
       return true
     }
+    let notifyTimer = null
+    const notifyAdvanced = () => {
+      if (notifyTimer !== null) return
+      notifyTimer = setTimeout(() => {
+        notifyTimer = null
+        for (const listener of [...changesListeners]) listener()
+      }, CHANGES_NOTIFY_MERGE_MS)
+    }
     void (async () => {
-      // 主循环:成功即立即重连(空闲期由服务端挂起兜底),失败指数退避;任何时刻至多一条在途请求
+      // 主循环:经历服务端挂起即立即重连,未挂起(变更密集)按忙时间隙限频;失败指数退避;任何时刻至多一条在途请求
       let backoffMs = CHANGES_RETRY_MIN_MS
       while (!changesController.signal.aborted) {
         let ok = false
+        const startedAt = Date.now()
         try {
           ok = await changesPollOnce()
         } catch { ok = false }
         if (changesController.signal.aborted) break
         if (ok) {
           backoffMs = CHANGES_RETRY_MIN_MS
-          await changesSleep(0, changesController.signal)
+          const hung = Date.now() - startedAt >= CHANGES_HUNG_MIN_MS
+          await changesSleep(hung ? 0 : CHANGES_BUSY_GAP_MS, changesController.signal)
         } else {
           await changesSleep(backoffMs, changesController.signal)
           backoffMs = Math.min(backoffMs * 2, CHANGES_RETRY_MAX_MS)

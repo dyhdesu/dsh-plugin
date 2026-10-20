@@ -13,7 +13,7 @@ client.js 与 core 之间存在镜像逻辑的(如 turn-notify 的 chooseChannel
 
 ## 网络请求量核查(测试阶段强制)
 
-涉及 client 数据刷新、轮询、长轮询、事件订阅的改动,测试阶段必须在 DevTools Network 面板核查 dsh 请求量,历史上 rsww 曾因 setInterval 短轮询与变更风暴打爆服务端:
+涉及 client 数据刷新、轮询、长轮询、事件订阅的改动,测试阶段必须在 DevTools Network 面板核查 dsh 请求量,历史上 多个插件 曾因 setInterval 短轮询与变更风暴导致服务卡顿:
 
 - 空闲期(无数据变更):除长轮询挂起连接外,不得出现周期性重复请求
 - 活跃期:请求频率须有上界(限频/合并节流/退避生效);瀑布图中同路径请求间隔持续小于 1s 即为请求风暴,禁止合入

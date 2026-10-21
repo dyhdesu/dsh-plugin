@@ -1700,7 +1700,9 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
     ensureCloneButton(doc, footerParts, onOpen)
   }
   observer = new MutationObserver(rescan)
-  observer.observe(doc.documentElement, { childList: true, subtree: true })
+  // disabled 属性观察:空目录导航完成后无 childList 变异,打开按钮的可用态
+  // 翻转只有属性事件;镜像写入是条件写(值不变不落属性),不构成变异环
+  observer.observe(doc.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] })
   rescan()
   return () => {
     disposed = true

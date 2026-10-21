@@ -9,8 +9,15 @@
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
 
 import schemastery from '@deepseek-ai/schemastery'
+
+import {
+  deriveRepoName,
+  resolveCloneRequest,
+  runClone,
+} from './clone.mjs'
 
 import {
   HISTORY_ALIGN_SLICE_MS,
@@ -35,9 +42,27 @@ import { createRequire } from 'node:module'
 
 export const name = 'dsh-context-manager'
 
+
 export const inject = ['webServer', 'agents', 'sessionQuery', 'sessionPersistence']
 
 const NAMESPACE = 'context'
+
+// 克隆并发拒绝文案:导出供测试断言
+export const CLONE_BUSY_MESSAGE = '已有克隆任务进行中,请等待完成'
+
+// 进程树终止:git 在 Windows 派生子进程(git-remote-https 等),单杀留孤儿;
+// POSIX 直接 SIGKILL;进程已退出时终止动作按无害失败处理
+function killTree(pid) {
+  if (process.platform === 'win32') {
+    spawn('taskkill', ['/pid', String(pid), '/T', '/F'])
+    return
+  }
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {
+    // 进程已退出
+  }
+}
 
 // 路由响应文案;导出供测试断言与实现同步。
 export const MESSAGES = {
@@ -59,6 +84,8 @@ const SETTINGS_SCHEMA = schemastery.object({
     .description('分叉成功后自动把该轮原输入发送到子会话(重生成语义);关闭时仅回填子会话输入框供编辑重发'),
   copySidEnabled: schemastery.boolean().default(true)
     .description('会话标题栏的复制 sessionId 按钮,平时隐藏,鼠标悬停标题栏时显示,点击复制当前会话 id;关闭后按钮整体不渲染;变更刷新页面生效'),
+  cloneEnabled: schemastery.boolean().default(true)
+    .description('官方「添加工作区」浏览目录弹窗内的「克隆仓库」按钮,输入远程仓库地址克隆到所选目录并自动打开为新工作区;关闭后按钮不再注入,刷新页面生效'),
 })
 
 // 0.1.7 宿主以静态 Config 导出生成设置节表单(maintain 同构);legacy 宿主经
@@ -104,6 +131,7 @@ function readSettings(ctx, config) {
     forkEnabled: !value || value.forkEnabled !== false,
     forkAutoResendEnabled: Boolean(value && value.forkAutoResendEnabled === true),
     copySidEnabled: !value || value.copySidEnabled !== false,
+    cloneEnabled: !value || value.cloneEnabled !== false,
   }
 }
 
@@ -357,6 +385,9 @@ export function apply(ctx, config) {
   const pendingFocus = new Map()
   ctx.effect(() => () => pendingFocus.clear(), 'context-manager history pending focus')
 
+  // 克隆单飞行守卫:git clone 重且不可并发,完成(含失败)即解锁
+  let cloneInFlight = false
+
   // 按范围读取历史:全部直接读持久缓存(毫秒级)立即返回,对齐由后台进行;
   // aligned=false 表示数据未就绪(首次无缓存,或请求会话产物已变而缓存未跟上),
   // client 据此提示等待并静默重拉
@@ -421,6 +452,76 @@ export function apply(ctx, config) {
   }
 
   const routes = [
+    {
+      // 克隆仓库:resolveCloneRequest 校验(url 形态/父目录存在/目录名单段/目标
+      // 不存在)后 git clone;单飞行守卫在 handler 同步段置位,并发请求直接拒绝;
+      // 成功返回 target 路径,由 client 侧继续创建工作区并打开
+      path: '/api/context/git-clone',
+      handler: async (req, res) => {
+        if (!rejectMethod(req, res, 'POST')) return
+        if (cloneInFlight) {
+          sendJson(res, 400, { error: CLONE_BUSY_MESSAGE })
+          return
+        }
+        cloneInFlight = true
+        try {
+          let body
+          try {
+            body = JSON.parse(await readBody(req))
+          } catch {
+            throw new Error(MESSAGES.badJsonBody)
+          }
+          const request = await resolveCloneRequest(body, {
+            homedirPath: homedir(),
+            statParent: async (dir) => {
+              try {
+                return (await stat(dir)).isDirectory()
+              } catch {
+                return false
+              }
+            },
+            existsTarget: async (target) => {
+              try {
+                await stat(target)
+                return true
+              } catch {
+                return false
+              }
+            },
+          })
+          const result = await runClone({ ...request, spawn, treeKill: killTree })
+          if (ctx.logger) ctx.logger.info('context-manager 克隆完成: ' + result.path)
+          sendJson(res, 200, { path: result.path })
+        } catch (error) {
+          respondError(ctx, res, error)
+        } finally {
+          cloneInFlight = false
+        }
+      },
+    },
+    {
+      // 克隆仓库按钮启停:与历史浮层开关同构,读走 settings,写经 settings.update
+      path: '/api/context/clone-enabled',
+      handler: async (req, res) => {
+        try {
+          if (req.method === 'GET') {
+            sendJson(res, 200, { enabled: readSettings(ctx, config).cloneEnabled })
+            return
+          }
+          if (!rejectMethod(req, res, 'POST')) return
+          let body
+          try {
+            body = JSON.parse(await readBody(req))
+          } catch {
+            throw new Error(MESSAGES.badJsonBody)
+          }
+          await persistToggle(ctx, { cloneEnabled: Boolean(body && body.enabled) })
+          sendJson(res, 200, { enabled: readSettings(ctx, config).cloneEnabled })
+        } catch (error) {
+          respondError(ctx, res, error)
+        }
+      },
+    },
     {
       path: '/api/context/inputs',
       handler: async (req, res) => {

@@ -6,15 +6,19 @@
 // host 侧只有其启停路由。
 // 插话撤回启停与历史浮层启停读走 settings(原生设置页与本分区开关同一存储)。
 
-import { stat } from 'node:fs/promises'
+import { stat, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 
 import schemastery from '@deepseek-ai/schemastery'
 
 import {
-  deriveRepoName,
+  TARGET_EMPTY_DIR,
+  TARGET_FILE,
+  TARGET_MISSING,
+  TARGET_NONEMPTY_DIR,
+  parentOf,
   resolveCloneRequest,
   runClone,
 } from './clone.mjs'
@@ -473,23 +477,33 @@ export function apply(ctx, config) {
           }
           const request = await resolveCloneRequest(body, {
             homedirPath: homedir(),
-            statParent: async (dir) => {
+            // stat + readdir 归一四态:git 允许克隆进空目录,其余占用形态拒绝
+            targetState: async (target) => {
+              let info
               try {
-                return (await stat(dir)).isDirectory()
+                info = await stat(target)
               } catch {
-                return false
+                return TARGET_MISSING
               }
-            },
-            existsTarget: async (target) => {
+              if (!info.isDirectory()) return TARGET_FILE
               try {
-                await stat(target)
-                return true
+                return (await readdir(target)).length > 0 ? TARGET_NONEMPTY_DIR : TARGET_EMPTY_DIR
               } catch {
-                return false
+                return TARGET_NONEMPTY_DIR
               }
             },
           })
-          const result = await runClone({ ...request, spawn, treeKill: killTree })
+          // 父目录必须存在:spawn 的 cwd 不存在同样抛 ENOENT,与 git 缺失同码,
+          // 前置校验避免误报「git 不可用」
+          const parentDir = parentOf(request.target)
+          let parentInfo
+          try {
+            parentInfo = await stat(parentDir)
+          } catch {
+            parentInfo = null
+          }
+          if (!parentInfo || !parentInfo.isDirectory()) throw new Error('父目录不存在或不是目录:' + parentDir)
+          const result = await runClone({ ...request, parent: parentDir, spawn, treeKill: killTree })
           if (ctx.logger) ctx.logger.info('context-manager 克隆完成: ' + result.path)
           sendJson(res, 200, { path: result.path })
         } catch (error) {

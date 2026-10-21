@@ -1,8 +1,8 @@
-// 克隆仓库纯逻辑:URL→目录名推导、请求校验、git 参数构造与克隆执行。
-// 全部依赖注入(spawn/exists/now),无模块级可变状态;错误一律抛中文业务
+// 克隆仓库纯逻辑:请求校验(目标全路径)、git 参数构造与克隆执行。
+// 全部依赖注入(spawn/targetState),无模块级可变状态;错误一律抛中文业务
 // Error(无错误码),由路由层原样透传。
 
-import { join, isAbsolute, basename } from 'node:path'
+import { join, isAbsolute, dirname } from 'node:path'
 
 // 克隆整体超时:大仓库完整克隆的真实上界;超时树杀并按业务错误透出
 export const CLONE_TIMEOUT_MS = 30 * 60 * 1000
@@ -15,57 +15,44 @@ export const GIT_MISSING_MESSAGE = 'git 不可用:未安装或不在宿主 PATH 
 // 本地路径与 file:// 不收(克隆来源限定远程,防与目录选择语义混淆)
 const REMOTE_URL_RE = /^(?:https?|ssh|git):\/\/\S+|^git@[^\s:/]+:[^\s]+$/
 
-// 从远程地址推导默认目录名:去 .git 后缀与首尾空白;推导不出非空名即失败,
-// 由调用方要求用户手填
-export function deriveRepoName(rawUrl) {
-  const url = String(rawUrl ?? '').trim()
-  if (url === '') throw new Error('仓库地址不能为空')
-  let tail = url
-  const scp = /^git@[^:]+:(.+)$/.exec(url)
-  if (scp) tail = scp[1]
-  else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) tail = stripProtocol(url)
-  tail = tail.replace(/\/+$/, '')
-  const name = basename(tail).replace(/\.git$/i, '').trim()
-  if (name === '' || name === '.' || name === '..') throw new Error('无法从仓库地址推导目录名,请手动填写')
-  return name
-}
+// 目标路径状态(宿主 stat/readdir 的归一结果)
+export const TARGET_MISSING = 'missing'
+export const TARGET_EMPTY_DIR = 'empty'
+export const TARGET_NONEMPTY_DIR = 'nonempty'
+export const TARGET_FILE = 'file'
 
-function stripProtocol(url) {
-  return url.slice(url.indexOf('://') + 3)
-}
-
-// 请求解析与校验:parent 必须为已存在的绝对目录,name 缺省由 URL 推导且必须是
-// 单个路径段;返回 target 绝对路径。statParent/existsTarget 注入以便测试与路由
-// 层共用同一校验形态
-export async function resolveCloneRequest(body, { homedirPath, existsTarget, statParent }) {
+// 请求解析与校验:target 为目标完整目录路径(IDEA Get from VCS 同构),必须是
+// 可 ~ 展开的绝对路径;已存在时须为空目录(git 允许克隆进空目录),非空目录与
+// 文件一律拒绝。targetState 注入以便测试与路由层共用同一校验形态,
+// 返回 { url, target, shallow }
+export async function resolveCloneRequest(body, { homedirPath, targetState }) {
   const url = typeof body?.url === 'string' ? body.url.trim() : ''
   if (url === '') throw new Error('仓库地址不能为空')
   if (url.startsWith('-')) throw new Error('仓库地址不合法')
   if (!REMOTE_URL_RE.test(url)) throw new Error('仓库地址必须是 http(s)/ssh/git 远程地址或 git@ 形式')
 
-  const parent = typeof body?.parent === 'string' ? body.parent.trim() : ''
-  if (parent === '') throw new Error('父目录不能为空')
-  const expanded = expandHome(parent, homedirPath)
-  if (!isAbsolute(expanded)) throw new Error('父目录必须是绝对路径')
-  if (!(await statParent(expanded))) throw new Error('父目录不存在或不是目录:' + expanded)
+  const raw = typeof body?.target === 'string' ? body.target.trim() : ''
+  if (raw === '') throw new Error('目标目录不能为空')
+  const expanded = expandHome(raw, homedirPath)
+  if (!isAbsolute(expanded)) throw new Error('目标目录必须是绝对路径')
 
-  const name = typeof body?.name === 'string' && body.name.trim() !== ''
-    ? body.name.trim()
-    : deriveRepoName(url)
-  if (name === '.' || name === '..' || /[/\\]/.test(name)) throw new Error('目录名必须是单个路径段')
+  const state = await targetState(expanded)
+  if (state === TARGET_NONEMPTY_DIR) throw new Error('目标目录已存在且非空:' + expanded)
+  if (state === TARGET_FILE) throw new Error('目标路径已被文件占用:' + expanded)
 
-  const target = join(expanded, name)
-  if (await existsTarget(target)) throw new Error('目标目录已存在:' + target)
-  return { url, parent: expanded, name, shallow: body?.shallow === true, target }
+  return { url, target: expanded, shallow: body?.shallow === true }
 }
 
-// 父目录支持 ~ 前缀(客户端记忆值跨机器迁移时宿主侧展开);~ 单独出现或 ~/ 开头
+// 目标支持 ~ 前缀(客户端记忆值跨机器迁移时宿主侧展开);~ 单独出现或 ~/ 开头
 function expandHome(pathValue, homedirPath) {
   if (!homedirPath) return pathValue
   if (pathValue === '~') return homedirPath
   if (pathValue.startsWith('~/') || pathValue.startsWith('~\\')) return join(homedirPath, pathValue.slice(2))
   return pathValue
 }
+
+// 目标目录的父路径(clone 的 cwd)
+export const parentOf = (target) => dirname(target)
 
 // git 参数:选项必须在 `--` 之前,`--` 之后才是 url 与目标目录(url 以 `-` 开头
 // 的注入形态已被校验拦截,`--` 兜底)

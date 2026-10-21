@@ -1,108 +1,76 @@
-// 克隆仓库打开工作区:纯逻辑矩阵(目录名推导/请求校验/参数构造/克隆执行)
-// + 路由层校验拒绝 + client 镜像 parity 与注入锚点结构契约。
-// 真实 git 只验证参数构造与超时桩,克隆成功路径全走 spawn 注入,零网络零仓库依赖。
+// 克隆仓库打开工作区:纯逻辑矩阵(目标全路径校验/git 参数构造/克隆执行)
+// + 路由层校验拒绝 + client 侧推导/轮询/读取行为。
+// 真实 git 只验证参数构造与失败路径,克隆成功路径全走 spawn 注入,零网络零仓库依赖。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const {
-  deriveRepoName,
   resolveCloneRequest,
   buildCloneArgs,
   runClone,
   tailLines,
   CLONE_TIMEOUT_MS,
+  TARGET_EMPTY_DIR,
+  TARGET_FILE,
+  TARGET_MISSING,
+  TARGET_NONEMPTY_DIR,
 } = await import('../src/clone.mjs')
 const { apply, MESSAGES } = await import('../src/index.js')
 
-// ── 目录名推导 ──
+// ── 请求校验(目标全路径,IDEA Get from VCS 同构)──
 
-test('Given 各形态远程地址, When deriveRepoName, Then 推导去 .git 的尾段目录名', () => {
-  assert.equal(deriveRepoName('https://github.com/user/repo.git'), 'repo')
-  assert.equal(deriveRepoName('https://github.com/user/repo'), 'repo')
-  assert.equal(deriveRepoName('https://github.com/user/repo/'), 'repo')
-  assert.equal(deriveRepoName('git@github.com:user/repo.git'), 'repo')
-  assert.equal(deriveRepoName('ssh://git@host:2222/group/inner/repo.git'), 'repo')
-  assert.equal(deriveRepoName('  https://example.com/My.Repo.GIT  '), 'My.Repo')
-})
+const stateOf = (mapping) => async (target) => mapping[target] ?? TARGET_MISSING
 
-test('Given 空地址或推导不出尾段, When deriveRepoName, Then 抛中文业务错误', () => {
-  assert.throws(() => deriveRepoName(''), /仓库地址不能为空/)
-  assert.throws(() => deriveRepoName('   '), /仓库地址不能为空/)
-  assert.throws(() => deriveRepoName('https://example.com/.git'), /无法从仓库地址推导目录名/)
-})
-
-// ── 请求校验 ──
-
-function statOk() { return async () => true }
-function statMissing() { return async () => false }
-
-test('Given 合法请求, When resolveCloneRequest, Then 返回 url/name/shallow/target 且目标由 name 决定', async () => {
+test('Given 合法请求, When resolveCloneRequest, Then 返回 url/target/shallow 原样透传', async () => {
   const request = await resolveCloneRequest(
-    { url: 'https://github.com/user/repo.git', parent: 'C:\\work', shallow: true },
-    { homedirPath: 'C:\\Users\\u', statParent: statOk(), existsTarget: statMissing() },
+    { url: 'https://github.com/user/repo.git', target: 'C:\\work\\repo', shallow: true },
+    { homedirPath: 'C:\\Users\\u', targetState: stateOf({}) },
   )
   assert.equal(request.url, 'https://github.com/user/repo.git')
-  assert.equal(request.name, 'repo')
+  assert.equal(request.target, 'C:\\work\\repo')
   assert.equal(request.shallow, true)
-  assert.equal(request.target, join('C:\\work', 'repo'))
 })
 
-test('Given name 缺省, When resolveCloneRequest, Then 由 URL 推导;name 含路径段分隔符或点项则拒绝', async () => {
-  const derived = await resolveCloneRequest(
-    { url: 'git@github.com:user/proj.git', parent: '/tmp' },
-    { homedirPath: '', statParent: statOk(), existsTarget: statMissing() },
-  )
-  assert.equal(derived.name, 'proj')
-  for (const name of ['a/b', 'a\\b', '..', '.']) {
-    await assert.rejects(
-      () => resolveCloneRequest(
-        { url: 'https://e.com/r.git', parent: '/tmp', name },
-        { homedirPath: '', statParent: statOk(), existsTarget: statMissing() },
-      ),
-      /目录名必须是单个路径段/,
-    )
-  }
-})
-
-test('Given 非法 url 或非法父目录, When resolveCloneRequest, Then 逐项拒绝', async () => {
-  const base = { parent: '/tmp' }
-  const options = { homedirPath: '/home/u', statParent: statOk(), existsTarget: statMissing() }
-  await assert.rejects(() => resolveCloneRequest({ ...base, url: '' }, options), /仓库地址不能为空/)
-  await assert.rejects(() => resolveCloneRequest({ ...base, url: '-u=https://e.com/r' }, options), /仓库地址不合法/)
-  await assert.rejects(() => resolveCloneRequest({ ...base, url: 'file:///tmp/r' }, options), /远程地址/)
-  await assert.rejects(() => resolveCloneRequest({ ...base, url: 'C:\\repos\\r' }, options), /远程地址/)
-  await assert.rejects(() => resolveCloneRequest({ url: 'https://e.com/r.git', parent: '' }, options), /父目录不能为空/)
+test('Given 目标四态, When resolveCloneRequest, Then 缺失与空目录放行,非空与文件拒绝', async () => {
+  const options = { homedirPath: '', targetState: stateOf({ '/t/empty': TARGET_EMPTY_DIR, '/t/full': TARGET_NONEMPTY_DIR, '/t/file': TARGET_FILE }) }
+  const missing = await resolveCloneRequest({ url: 'https://e.com/r.git', target: '/t/new' }, options)
+  assert.equal(missing.target, '/t/new')
+  const empty = await resolveCloneRequest({ url: 'https://e.com/r.git', target: '/t/empty' }, options)
+  assert.equal(empty.target, '/t/empty')
   await assert.rejects(
-    () => resolveCloneRequest({ url: 'https://e.com/r.git', parent: 'relative/path' }, options),
-    /父目录必须是绝对路径/,
+    () => resolveCloneRequest({ url: 'https://e.com/r.git', target: '/t/full' }, options),
+    /目标目录已存在且非空/,
   )
   await assert.rejects(
-    () => resolveCloneRequest({ url: 'https://e.com/r.git', parent: '/nope' }, { ...options, statParent: statMissing() }),
-    /父目录不存在或不是目录/,
+    () => resolveCloneRequest({ url: 'https://e.com/r.git', target: '/t/file' }, options),
+    /目标路径已被文件占用/,
   )
 })
 
-test('Given 目标目录已存在, When resolveCloneRequest, Then 拒绝并报目标路径', async () => {
+test('Given 非法 url 或非法目标, When resolveCloneRequest, Then 逐项拒绝', async () => {
+  const options = { homedirPath: '/home/u', targetState: stateOf({}) }
+  await assert.rejects(() => resolveCloneRequest({ url: '', target: '/tmp' }, options), /仓库地址不能为空/)
+  await assert.rejects(() => resolveCloneRequest({ url: '-u=https://e.com/r', target: '/tmp' }, options), /仓库地址不合法/)
+  await assert.rejects(() => resolveCloneRequest({ url: 'file:///tmp/r', target: '/tmp' }, options), /远程地址/)
+  await assert.rejects(() => resolveCloneRequest({ url: 'C:\\repos\\r', target: '/tmp' }, options), /远程地址/)
+  await assert.rejects(() => resolveCloneRequest({ url: 'https://e.com/r.git', target: '' }, options), /目标目录不能为空/)
   await assert.rejects(
-    () => resolveCloneRequest(
-      { url: 'https://e.com/r.git', parent: '/tmp' },
-      { homedirPath: '', statParent: statOk(), existsTarget: async () => true },
-    ),
-    /目标目录已存在/,
+    () => resolveCloneRequest({ url: 'https://e.com/r.git', target: 'relative/path' }, options),
+    /目标目录必须是绝对路径/,
   )
 })
 
-test('Given 父目录为 ~ 前缀, When resolveCloneRequest, Then 以宿主 home 展开', async () => {
+test('Given 目标为 ~ 前缀, When resolveCloneRequest, Then 以宿主 home 展开', async () => {
   const request = await resolveCloneRequest(
-    { url: 'https://e.com/r.git', parent: '~/work' },
-    { homedirPath: '/home/u', statParent: statOk(), existsTarget: statMissing() },
+    { url: 'https://e.com/r.git', target: '~/work/repo' },
+    { homedirPath: '/home/u', targetState: stateOf({}) },
   )
-  assert.equal(request.parent, join('/home/u', 'work'))
+  assert.equal(request.target, join('/home/u', 'work/repo'))
 })
 
 // ── git 参数构造 ──
@@ -245,11 +213,10 @@ test('Given 克隆路由, When 各非法请求, Then 逐项中文拒绝且无进
   assert.ok(handler, '克隆路由未注册')
   const cases = [
     [{}, /仓库地址不能为空/],
-    [{ url: '-x', parent: '/tmp' }, /仓库地址不合法/],
-    [{ url: 'file:///x', parent: '/tmp' }, /远程地址/],
-    [{ url: 'https://e.com/r.git', parent: '' }, /父目录不能为空/],
-    [{ url: 'https://e.com/r.git', parent: 'rel' }, /父目录必须是绝对路径/],
-    [{ url: 'https://e.com/r.git', parent: sharedTmp, name: 'a/b' }, /目录名必须是单个路径段/],
+    [{ url: '-x', target: '/tmp' }, /仓库地址不合法/],
+    [{ url: 'file:///x', target: '/tmp' }, /远程地址/],
+    [{ url: 'https://e.com/r.git', target: '' }, /目标目录不能为空/],
+    [{ url: 'https://e.com/r.git', target: 'rel' }, /目标目录必须是绝对路径/],
   ]
   for (const [body, pattern] of cases) {
     const res = makeResponse()
@@ -259,23 +226,19 @@ test('Given 克隆路由, When 各非法请求, Then 逐项中文拒绝且无进
   }
 })
 
-test('Given 克隆路由, When 父目录不存在, Then 拒绝且不拉起 git', async () => {
+test('Given 克隆路由, When 目标为非空目录或文件, Then 拒绝且不拉起 git', async () => {
   const { handlers } = makeRouteCtx()
   const handler = handlers.get('/api/context/git-clone')
-  const res = makeResponse()
-  await handler(makeRequest('POST', { url: 'https://e.com/r.git', parent: join(sharedTmp, 'no-such-dir') }), res)
-  assert.equal(res.status, 400)
-  assert.match(res.body.error, /父目录不存在或不是目录/)
-})
-
-test('Given 克隆路由, When 目标目录已存在, Then 拒绝且不拉起 git', async () => {
-  const existing = mkdtempSync(join(sharedTmp, 'exists-'))
-  const { handlers } = makeRouteCtx()
-  const handler = handlers.get('/api/context/git-clone')
-  const res = makeResponse()
-  await handler(makeRequest('POST', { url: 'https://e.com/r.git', parent: sharedTmp, name: existing.split(/[\\/]/).pop() }), res)
-  assert.equal(res.status, 400)
-  assert.match(res.body.error, /目标目录已存在/)
+  const nonempty = mkdtempSync(join(sharedTmp, 'full-'))
+  writeFileSync(join(nonempty, 'seed.txt'), 'x')
+  const res1 = makeResponse()
+  await handler(makeRequest('POST', { url: 'https://e.com/r.git', target: nonempty }), res1)
+  assert.equal(res1.status, 400)
+  assert.match(res1.body.error, /目标目录已存在且非空/)
+  const res2 = makeResponse()
+  await handler(makeRequest('POST', { url: 'https://e.com/r.git', target: join(sharedTmp, 'no-such-parent', 'repo') }), res2)
+  assert.equal(res2.status, 400)
+  assert.match(res2.body.error, /父目录不存在或不是目录/, '父链缺失应前置拒绝,防 cwd ENOENT 误报 git 缺失')
 })
 
 test('Given 克隆路由, When GET, Then 405', async () => {
@@ -299,78 +262,27 @@ test('Given 真实 git 与不可达 .invalid 域, When POST 合法请求, Then �
   const handler = handlers.get('/api/context/git-clone')
   const res = makeResponse()
   await handler(
-    makeRequest('POST', { url: 'https://cx-clone-nonexistent.invalid/repo.git', parent: sharedTmp, name: 'invalid-host-probe' }),
+    makeRequest('POST', { url: 'https://cx-clone-nonexistent.invalid/repo.git', target: join(sharedTmp, 'invalid-host-probe') }),
     res,
   )
   assert.equal(res.status, 400)
   assert.match(res.body.error, /克隆失败/)
 })
 
-// ── client 镜像与注入锚点契约 ──
+// ── client 侧:推导/轮询/读取与注入锚点契约 ──
 
 const CLIENT_SRC = readFileSync(join(PKG_ROOT, 'src', 'client.js'), 'utf8')
 
-function loadClientModule() {
-  const modules = []
-  const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
-  const reactStub = { useState: (v) => [v, () => {}], useEffect: () => {}, useRef: (v) => ({ current: v }), createElement: () => null }
-  const requireStub = (name) => (name === '@mzzsfy/dsh-toast/client' ? { show: () => 0 } : reactStub)
-  const factory = new Function('window', 'require', 'document', CLIENT_SRC + '\n;return null')
-  factory(windowStub, requireStub, { createElement: () => ({ style: {}, remove() {} }), head: { appendChild: () => {} }, body: { appendChild: () => {} } })
-  assert.equal(modules.length, 1, 'client.js 模块未被捕获')
-  return modules[0].factory(requireStub)
-}
-
-test('Given client 与 clone.mjs 各持一份目录名推导, When 同输入, Then 行为同源(parity)', async () => {
-  const mod = loadClientModule()
-  const clientApply = mod.apply
-  assert.equal(typeof clientApply, 'function')
-  // 经 apply 装配面拿不到内部函数,镜像 parity 以源码级再声明执行:提取 client.js
-  // 中 deriveRepoNameClient 函数体独立求值,与 host 实现逐用例对照
+test('Given client 内联目录名推导, When 各形态地址, Then 推导去 .git 的尾段;空/无效返回 null', () => {
   const declared = CLIENT_SRC.match(/function deriveRepoNameClient\(rawUrl\) \{[\s\S]*?\n\}/)
   assert.ok(declared, 'client.js 必须内联声明 deriveRepoNameClient')
-  const deriveClient = new Function(declared[0] + '\nreturn deriveRepoNameClient')()
-  const cases = ['https://github.com/user/repo.git', 'https://github.com/user/repo/', 'git@github.com:user/repo.git', 'ssh://git@host:2222/g/r.git', '']
-  for (const value of cases) {
-    let hostOutcome
-    try {
-      hostOutcome = { value: deriveRepoName(value) }
-    } catch {
-      hostOutcome = { value: null }
-    }
-    const clientOutcome = { value: deriveClient(value) }
-    assert.deepEqual(clientOutcome, hostOutcome, '目录名推导镜像不一致: ' + value)
-  }
-})
-
-test('Given client.js 装配面, When apply, Then inject 列表不含 uiWorkspace(防门控放大)且克隆注入经 ctx.effect', async () => {
-  const effects = []
-  const registered = []
-  const modules = []
-  const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
-  const reactStub = { useState: (v) => [v, () => {}], useEffect: () => {}, useRef: (v) => ({ current: v }), createElement: () => null }
-  const requireStub = (name) => (name === '@mzzsfy/dsh-toast/client' ? { show: () => 0 } : reactStub)
-  const factory = new Function('window', 'require', 'document', CLIENT_SRC + '\n;return null')
-  factory(windowStub, requireStub, { createElement: () => ({ style: {}, remove() {} }), head: { appendChild: () => {} }, body: { appendChild: () => {} } })
-  const mod = modules[0].factory(requireStub)
-  const injectDeclaration = CLIENT_SRC.match(/inject: \[[^\]]*\]/)
-  assert.ok(injectDeclaration, 'inject 声明缺失')
-  assert.ok(!injectDeclaration[0].includes('uiWorkspace'), 'uiWorkspace 不得进入 inject 列表(缺服务时会把门控放大到整个插件)')
-  const ctx = {
-    get(name) {
-      if (name === 'sessions') return { fork: () => Promise.resolve('c1') }
-      if (name === 'workspaces') return { create: async () => ({ workspace: { workspaceId: 'w1' } }) }
-      return {}
-    },
-    effect(_fn, label) { effects.push(label) },
-    slots: {
-      inject: (name, register) => register(),
-      register: (options, component) => registered.push({ options, component }),
-    },
-    get remote() { return { session: {} } },
-  }
-  mod.apply(ctx)
-  assert.ok(effects.some((label) => String(label).includes('clone injection')), '克隆注入效应未注册')
+  const derive = new Function(declared[0] + '\nreturn deriveRepoNameClient')()
+  assert.equal(derive('https://github.com/user/repo.git'), 'repo')
+  assert.equal(derive('https://github.com/user/repo/'), 'repo')
+  assert.equal(derive('git@github.com:user/repo.git'), 'repo')
+  assert.equal(derive('ssh://git@host:2222/group/inner/repo.git'), 'repo')
+  assert.equal(derive(''), null)
+  assert.equal(derive('https://example.com/.git'), null)
 })
 
 test('Given list 读取轮询, When input 延迟出现/不出现, Then 轮询到返回节点/超时返回 null', async () => {
@@ -432,6 +344,37 @@ test('Given 读取路径前置守卫, When 编辑按钮缺失或禁用, Then 返
   assert.equal(await readBrowseCurrentPath(card2, {}), null, '编辑按钮禁用应返回 null')
 })
 
+test('Given client.js 装配面, When apply, Then inject 含 uiWorkspace(实测懒取不可达)且克隆注入经 ctx.effect', async () => {
+  const effects = []
+  const registered = []
+  const modules = []
+  const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
+  const reactStub = { useState: (v) => [v, () => {}], useEffect: () => {}, useRef: (v) => ({ current: v }), createElement: () => null }
+  const requireStub = (name) => (name === '@mzzsfy/dsh-toast/client' ? { show: () => 0 } : reactStub)
+  const factory = new Function('window', 'require', 'document', CLIENT_SRC + '\n;return null')
+  factory(windowStub, requireStub, { createElement: () => ({ style: {}, remove() {} }), head: { appendChild: () => {} }, body: { appendChild: () => {} } })
+  const mod = modules[0].factory(requireStub)
+  const injectDeclaration = CLIENT_SRC.match(/inject: \[[^\]]*\]/)
+  assert.ok(injectDeclaration, 'inject 声明缺失')
+  assert.ok(injectDeclaration[0].includes('uiWorkspace'), 'uiWorkspace 必须声明注入(懒取不可达,自动打开依赖它)')
+  const ctx = {
+    get(name) {
+      if (name === 'sessions') return { fork: () => Promise.resolve('c1') }
+      if (name === 'workspaces') return { create: async () => ({ workspaceId: 'w1' }) }
+      if (name === 'uiWorkspace') return { startSession: () => {} }
+      return {}
+    },
+    effect(_fn, label) { effects.push(label) },
+    slots: {
+      inject: (name, register) => register(),
+      register: (options, component) => registered.push({ options, component }),
+    },
+    get remote() { return { session: {} } },
+  }
+  mod.apply(ctx)
+  assert.ok(effects.some((label) => String(label).includes('clone injection')), '克隆注入效应未注册')
+})
+
 // findBrowseFooter 结构契约:footer=卡片直子末元素且至少 3 按钮,末按钮=打开,
 // 前一兄弟=取消;结构漂移时返回 null(干净禁用)
 function fakeElement(tag) {
@@ -451,7 +394,7 @@ function fakeElement(tag) {
   }
 }
 
-test('Given 官方弹窗结构, When findBrowseFooter 逻辑, Then 定位打开与取消按钮;结构漂移返回 null', async () => {
+test('Given 官方弹窗结构, When findBrowseFooter 逻辑, Then 定位打开与取消按钮;结构漂移返回 null', () => {
   const declared = CLIENT_SRC.match(/function findBrowseFooter\(card\) \{[\s\S]*?\n\}/)
   assert.ok(declared, 'client.js 必须内联声明 findBrowseFooter')
   const findFooter = new Function(declared[0] + '\nreturn findBrowseFooter')()
@@ -493,4 +436,81 @@ test('Given 官方弹窗结构, When findBrowseFooter 逻辑, Then 定位打开�
   scope2.parentElement = thinCard
   thinCard.querySelector = (selector) => (selector === '[role="navigation"]' ? nav2 : null)
   assert.equal(findFooter(thinCard), null, '按钮不足 3 的 footer 应返回 null')
+})
+
+test('Given 工作区 header, When ensureHeaderCloneButton, Then 注入添加按钮旁克隆邻居类名;幂等条件写;邻居缺失隐藏', () => {
+  const declared = CLIENT_SRC.match(/function ensureHeaderCloneButton\(doc, onOpen\) \{[\s\S]*?\n\}/)
+  assert.ok(declared, 'client.js 必须内联声明 ensureHeaderCloneButton')
+  const flagDecl = CLIENT_SRC.match(/const HEADER_CLONE_BTN_FLAG = '([^']+)'/)
+  const iconDecl = CLIENT_SRC.match(/const HEADER_CLONE_ICON = '([\s\S]+?)'\n/)
+  assert.ok(flagDecl && iconDecl, '常量声明缺失')
+  const ensure = new Function('HEADER_CLONE_BTN_FLAG', 'HEADER_CLONE_ICON', declared[0] + '\nreturn ensureHeaderCloneButton')(flagDecl[1], iconDecl[1])
+
+  const makeButton = () => ({
+    tagName: 'BUTTON',
+    type: '',
+    className: '',
+    title: '',
+    innerHTML: '',
+    attrs: {},
+    style: {},
+    disabled: false,
+    listeners: [],
+    parentElement: null,
+    setAttribute(name, value) { this.attrs[name] = value },
+    getAttribute(name) { return this.attrs[name] ?? null },
+    addEventListener(_type, listener) { this.listeners.push(listener) },
+  })
+  const addBtn = makeButton()
+  addBtn.attrs['aria-label'] = '添加工作区'
+  addBtn.className = 'icon-btn'
+  const holder = {
+    children: [addBtn],
+    querySelector(selector) {
+      if (selector === 'button[aria-label=添加工作区]') return addBtn
+      if (selector.includes('data-cx-clone-header-btn')) return this.children.find((c) => c.attrs && 'data-cx-clone-header-btn' in c.attrs) ?? null
+      return null
+    },
+    insertBefore(node, anchor) {
+      const at = this.children.indexOf(anchor)
+      this.children.splice(at < 0 ? this.children.length : at + 1, 0, node)
+      node.parentElement = this
+      return node
+    },
+  }
+  addBtn.parentElement = holder
+  const doc = {
+    querySelector(selector) {
+      if (selector === 'button[aria-label=添加工作区]') return addBtn
+      if (selector.includes('data-cx-clone-header-btn')) return holder.children.find((c) => c.attrs && 'data-cx-clone-header-btn' in c.attrs) ?? null
+      return null
+    },
+    createElement: () => makeButton(),
+  }
+
+  const first = ensure(doc, () => {})
+  assert.equal(first, true, '首次注入发生写入')
+  const injected = holder.children[holder.children.indexOf(addBtn) + 1]
+  assert.ok(injected, '应注入到添加按钮紧后')
+  assert.ok(!('data-plugin' in injected.attrs), '按钮不得带 data-plugin(宿主样式 claim 会把它当插件节点回收)')
+  assert.equal(injected.className, 'icon-btn', '克隆邻居按钮类名(原生视觉)')
+  assert.equal(injected.disabled, false, '镜像添加按钮可用态')
+  const again = ensure(doc, () => {})
+  assert.equal(again, false, '幂等:无变化不写(条件写防变异环)')
+
+  // 基座重渲染重建按钮并翻转镜像 → 条件写跟进
+  addBtn.disabled = true
+  assert.equal(ensure(doc, () => {}), true, '镜像翻转发生写入')
+  assert.equal(injected.disabled, true)
+
+  // 邻居短暂消失:隐藏而非移除,回来后复显
+  const docNoAdd = {
+    querySelector: (selector) => (selector.includes('data-cx-clone-header-btn') ? injected : null),
+    createElement: () => makeButton(),
+  }
+  injected.style.display = ''
+  assert.equal(ensure(docNoAdd, () => {}), true, '隐藏发生写入')
+  assert.equal(injected.style.display, 'none', '应隐藏注入按钮')
+  assert.equal(ensure(doc, () => {}), true, '复显发生写入')
+  assert.notEqual(injected.style.display, 'none', '邻居恢复后应复显')
 })

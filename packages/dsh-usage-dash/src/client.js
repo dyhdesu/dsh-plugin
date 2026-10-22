@@ -246,11 +246,6 @@ const MESSAGES_ZH = {
   anomalyLog: '扫描异常日志',
   logKindSkipped: '跳过会话',
   logKindRecord: '写入失败',
-  'stats.counts': '{turns} 轮 · {steps} 步',
-  'stats.llm': 'LLM {duration}',
-  'stats.toolCall': '工具调用 {duration}',
-  'stats.ttftAverage': '首 token 平均 {duration}',
-  'stats.tokensPerSecond': '{throughput} tok/s',
   'stats.cacheHit': '缓存命中 {percent}%',
   'stats.tokens': '输入 {input} tok · 输出 {output} tok',
   'turnCostChip': '{cost}',
@@ -394,11 +389,6 @@ const MESSAGES_EN = {
   anomalyLog: 'Scan anomaly log',
   logKindSkipped: 'skipped',
   logKindRecord: 'write failed',
-  'stats.counts': '{turns} turns · {steps} steps',
-  'stats.llm': 'LLM {duration}',
-  'stats.toolCall': 'Tool call {duration}',
-  'stats.ttftAverage': 'TTFT avg {duration}',
-  'stats.tokensPerSecond': '{throughput} tok/s',
   'stats.cacheHit': 'Cache hit {percent}%',
   'stats.tokens': 'Input {input} tok · Output {output} tok',
   'turnCostChip': '{cost}',
@@ -1029,19 +1019,13 @@ function tipPlace(anchor, tip, bounds, gap = TIP_GAP_PX, margin = TIP_MARGIN_PX)
   return { left, top }
 }
 
-// ===== 底部信息栏:官方 StatsLine 口径(dsh-client-ui-chat/lib/client.js 同构)+ usp 双开关 =====
+// ===== 底部信息栏(append 模式):官方 pill 数据后追加增强项 + usp 双开关 =====
 const STATS_LINE_STORAGE_KEY = 'dsh-usage-dash:stats-line'
 const LOCALE_NS = 'usage-dash'
-const STATS_ITEM_SEPARATOR = ' · '
 const MS_PER_SECOND = 1000
 const SECONDS_PER_MINUTE = 60
 const NUMBER_ONE_DECIMAL = 10
 const NUMBER_COMPACT_INT_THRESHOLD = 100
-const PERCENT_TENTH_SCALE = 10
-const PERCENT_GAP_DOUBLE_SCALE = 2 * PERCENT_SCALE
-const PERCENT_LOSS_BASE = 10
-const PERCENT_LOSS_CAP = 4
-const PERCENT_LOSS_DEFAULT = 5
 const PERCENT_PRECISE_CAP = 99.99
 const DURATION_MINUTE_SECONDS = 60
 const TPS_INTEGER_THRESHOLD = 10
@@ -1049,65 +1033,6 @@ const TPS_INTEGER_THRESHOLD = 10
 // 官方 billing 分母:三个互斥的 prompt 侧计费桶
 function billedInputTokens(usage) {
   return usage.uncachedInputTokens + usage.cacheReadTokens + usage.cacheWriteTokens
-}
-
-// 官方二分取整:求最大 units 使 hit ≥ (2u-1)q + ceil((2u-1)r/2s),Math.round(hit·scale/D) 的保守复刻
-function roundedPercentUnits(cacheReadTokens, denominator, decimalPlaces) {
-  const scale = (decimalPlaces === 0 ? 1 : PERCENT_TENTH_SCALE) * PERCENT_SCALE
-  const doubledScale = scale * 2
-  const quotient = Math.floor(denominator / doubledScale)
-  const remainder = denominator % doubledScale
-  const holds = (candidate) => {
-    const doubled = candidate * 2 - 1
-    return cacheReadTokens >= doubled * quotient + Math.ceil((doubled * remainder) / doubledScale)
-  }
-  let low = 0
-  let high = scale
-  while (low < high) {
-    const mid = Math.floor((low + high + 1) / 2)
-    if (holds(mid)) low = mid
-    else high = mid - 1
-  }
-  return low
-}
-
-function displayPercentUnits(units, decimalPlaces) {
-  if (decimalPlaces === 0) return String(units)
-  const whole = Math.floor(units / PERCENT_TENTH_SCALE)
-  const tenths = units % PERCENT_TENTH_SCALE
-  return tenths === 0 ? String(whole) : `${whole}.${tenths}`
-}
-
-// 官方整数百分比:0.5 进位;舍入溢出 100 而仍有 miss 时以 99.x 闭式诚实呈现
-function formatCacheHitPercent(cacheReadTokens, promptTokens, decimalPlaces = 0) {
-  if (promptTokens === 0) return null
-  const missed = promptTokens - cacheReadTokens
-  if (missed === 0) return '100'
-  const roundedUnits = roundedPercentUnits(cacheReadTokens, promptTokens, decimalPlaces)
-  const unitsCeiling = decimalPlaces === 0 ? PERCENT_SCALE : PERCENT_SCALE * PERCENT_TENTH_SCALE
-  if (roundedUnits < unitsCeiling) return displayPercentUnits(roundedUnits, decimalPlaces)
-  let distinguishingPlaces = 1
-  let scaledDoubleGap = missed * PERCENT_GAP_DOUBLE_SCALE
-  const denominatorTens = Math.floor(promptTokens / PERCENT_TENTH_SCALE)
-  while (scaledDoubleGap <= denominatorTens) {
-    scaledDoubleGap *= PERCENT_TENTH_SCALE
-    distinguishingPlaces += 1
-  }
-  const denominatorOnes = promptTokens % PERCENT_TENTH_SCALE
-  let roundedLoss = PERCENT_LOSS_DEFAULT
-  for (let loss = 1; loss <= PERCENT_LOSS_CAP; loss++) {
-    const factor = loss * 2 + 1
-    const threshold = factor * denominatorTens + Math.floor((factor * denominatorOnes) / PERCENT_TENTH_SCALE)
-    if (scaledDoubleGap <= threshold) {
-      roundedLoss = loss
-      break
-    }
-  }
-  return `99.${'9'.repeat(distinguishingPlaces - 1)}${PERCENT_LOSS_BASE - roundedLoss}`
-}
-
-function cacheHitPercent(usage) {
-  return formatCacheHitPercent(usage.cacheReadTokens, billedInputTokens(usage), 0)
 }
 
 // usp 增强:恒两位小数,有 miss 即 99.99 封顶(镜像官方整数路径的诚实性)
@@ -1148,89 +1073,28 @@ function formatTokensPerSecond(tps) {
   return String(Math.round(clamped * NUMBER_ONE_DECIMAL) / NUMBER_ONE_DECIMAL)
 }
 
-// 官方节点读数:TTFT/decode 仅在对应时间戳齐全时产出,usage 须为非负有限数
-function assistantStepReading(node) {
-  const timing = node.timing
-  const ttftMs = timing !== undefined && timing.stepStartTime !== null && timing.firstTokenTime !== null
-    ? Math.max(0, timing.firstTokenTime - timing.stepStartTime)
-    : null
-  const decodeMs = timing !== undefined && timing.firstTokenTime !== null
-    ? Math.max(0, timing.completedTime - timing.firstTokenTime)
-    : null
-  const outputTokens = typeof node.usage === 'number' && Number.isFinite(node.usage) && node.usage >= 0
-    ? node.usage
-    : null
-  return { ttftMs, decodeMs, outputTokens }
-}
-
-// 官方窗口折叠:tool-result 累计工具时长,assistant 计轮次/步数/LLM 时长并聚合读数
-function deriveStats(nodes) {
-  const turns = new Set()
-  const stats = { turns: 0, steps: 0, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 }
-  for (const node of nodes) {
-    if (node.kind === 'tool-result') {
-      if (node.callTime !== null) stats.toolMs += Math.max(0, node.time - node.callTime)
-      continue
-    }
-    if (node.kind !== 'assistant') continue
-    turns.add(node.turn)
-    stats.steps += 1
-    const timing = node.timing
-    if (timing !== undefined && timing.stepStartTime !== null) {
-      stats.llmMs += Math.max(0, timing.completedTime - timing.stepStartTime)
-    }
-    const reading = assistantStepReading(node)
-    if (reading.ttftMs !== null) {
-      stats.ttftMs += reading.ttftMs
-      stats.ttftSteps += 1
-    }
-    if (reading.decodeMs !== null && reading.outputTokens !== null) {
-      stats.decodeMs += reading.decodeMs
-      stats.decodeTokens += reading.outputTokens
-    }
-  }
-  stats.turns = turns.size
-  return stats
-}
-
-// 分组装配:官方 StatsLine 分组序 + usp 双开关(精确命中率/Token 明细)+ 费用开关;
-// 费用组在 Token 组后追加:开关关/无用量/价格未加载不渲染,规则已载无命中价显示占位符
-function buildStatsGroups(stats, usage, prefs, t, pricingRules = null) {
+// 分组装配(append 模式):官方 activity/usage pill 已承担轮步/时长/首token/速度/整数命中率/总量,
+// 本条目只渲染官方没有的增强项并追加在其后;开关关即不渲染对应增强项,全关时条目整体不渲染;
+// 费用组在末位追加:开关关/无用量/价格未加载不渲染,规则已载无命中价显示占位符
+function buildStatsGroups(usage, prefs, t, pricingRules = null) {
   const groups = []
-  if (stats.steps > 0) {
-    groups.push(t('stats.counts', { turns: stats.turns, steps: stats.steps }))
-    const durations = []
-    if (stats.llmMs > 0) durations.push(t('stats.llm', { duration: formatDuration(stats.llmMs, t) }))
-    if (stats.toolMs > 0) durations.push(t('stats.toolCall', { duration: formatDuration(stats.toolMs, t) }))
-    if (durations.length > 0) groups.push(durations.join(STATS_ITEM_SEPARATOR))
-    const speeds = []
-    if (stats.ttftSteps > 0) speeds.push(t('stats.ttftAverage', { duration: formatDuration(stats.ttftMs / stats.ttftSteps, t) }))
-    if (stats.decodeMs > 0) speeds.push(t('stats.tokensPerSecond', {
-      throughput: formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / MS_PER_SECOND)),
-    }))
-    if (speeds.length > 0) groups.push(speeds.join(STATS_ITEM_SEPARATOR))
-  }
-  if (usage !== undefined && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)) {
-    const percent = prefs.cachePrecision ? cacheHitPercentPrecise(usage) : cacheHitPercent(usage)
+  if (usage === undefined || (billedInputTokens(usage) === 0 && usage.outputTokens === 0)) return groups
+  if (prefs.cachePrecision) {
+    const percent = cacheHitPercentPrecise(usage)
     if (percent !== null) groups.push(t('stats.cacheHit', { percent }))
-    if (prefs.tokenDetail) {
-      const billed = billedInputTokens(usage)
-      groups.push(t('stats.tokensDetail', {
-        total: formatTokensCompact(billed + usage.outputTokens, t),
-        input: formatTokensCompact(billed, t),
-        hit: formatTokensCompact(usage.cacheReadTokens, t),
-        miss: formatTokensCompact(usage.uncachedInputTokens + usage.cacheWriteTokens, t),
-        output: formatTokensCompact(usage.outputTokens, t),
-      }))
-    } else {
-      groups.push(t('stats.tokens', {
-        input: formatTokensCompact(billedInputTokens(usage), t),
-        output: formatTokensCompact(usage.outputTokens, t),
-      }))
-    }
-    const costItem = buildCostItem(usage, pricingRules, prefs, t)
-    if (costItem !== null) groups.push(costItem)
   }
+  if (prefs.tokenDetail) {
+    const billed = billedInputTokens(usage)
+    groups.push(t('stats.tokensDetail', {
+      total: formatTokensCompact(billed + usage.outputTokens, t),
+      input: formatTokensCompact(billed, t),
+      hit: formatTokensCompact(usage.cacheReadTokens, t),
+      miss: formatTokensCompact(usage.uncachedInputTokens + usage.cacheWriteTokens, t),
+      output: formatTokensCompact(usage.outputTokens, t),
+    }))
+  }
+  const costItem = buildCostItem(usage, pricingRules, prefs, t)
+  if (costItem !== null) groups.push(costItem)
   return groups
 }
 
@@ -2691,14 +2555,12 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
           h('span', { className: 'ud-switch__thumb' })))
     }
 
-    // 底部信息栏接管:与官方 StatsLine 同 id 'stats' 的槽条目,双开关控制增强项
+    // 底部信息栏 append 条目:与官方 activity/usage pill 同处 dock 槽,order 排官方之后,
+    // 只渲染官方没有的增强项(精确命中率/Token 明细/费用),官方数据由官方组件原样渲染
     // 语言切换经槽的 locale 座以新 t 引用驱动 memo 重渲染
-    const StatsLineEnhanced = React.memo(function StatsLineEnhanced({ useChat, useProjection, t = defaultT }) {
-      if (typeof useProjection !== 'function' || typeof useChat !== 'function') return null
+    const StatsLineAppended = React.memo(function StatsLineAppended({ useProjection, t = defaultT }) {
+      if (typeof useProjection !== 'function') return null
       const usage = useProjection('tokenUsage')
-      const projected = useProjection('sessionStats')
-      const settledNodes = useChat((state) => state.legacy.nodes)
-      const stats = useMemo(() => projected ?? deriveStats(settledNodes ?? []), [projected, settledNodes])
       const [prefs, setPrefs] = useState(() => statsLineState.get())
       useEffect(() => statsLineState.subscribe(() => setPrefs(statsLineState.get())), [])
       // 价格异步首帧可能未回:回包经状态刷新补渲染,未回期间费用组不渲染
@@ -2710,7 +2572,7 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
         })
         return () => { alive = false }
       }, [])
-      const groups = buildStatsGroups(stats, usage, prefs, t, pricingRules)
+      const groups = buildStatsGroups(usage, prefs, t, pricingRules)
       const costItem = buildCostItem(usage, pricingRules, prefs, t)
       const entries = groups.map((text) => ({ text }))
       if (costItem !== null && groups[groups.length - 1] === costItem) {
@@ -3550,12 +3412,13 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
             { name: 'settings.section', id: 'usage-dash', order: 45, label: () => ctx.locale.bind(LOCALE_NS)('nav'), locale: LOCALE_NS },
             UsageDashPanel,
           ))
-        // 两段式接管官方 stats 格:宿主缺该插槽时注册抛错即禁用本功能
+        // 两段式注册官方 dock 槽增强条目:宿主缺该插槽时注册抛错即禁用本功能;
+        // order 2 排官方 activity(0)/usage(1) 之后,append 在官方数据后面
         try {
           ctx.slots.inject('conversation.composer.dock', () =>
             ctx.slots.register(
-              { name: 'conversation.composer.dock', id: 'stats', order: 0, priority: STATS_SLOT_PRIORITY, locale: LOCALE_NS },
-              StatsLineEnhanced,
+              { name: 'conversation.composer.dock', id: 'stats', order: 2, priority: STATS_SLOT_PRIORITY, locale: LOCALE_NS },
+              StatsLineAppended,
             ))
         } catch (error) {
           console.warn('[usage-dash] 底部信息栏未注册(宿主无 conversation.composer.dock 插槽)', error)

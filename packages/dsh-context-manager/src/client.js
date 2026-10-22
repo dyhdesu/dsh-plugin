@@ -1398,7 +1398,7 @@ const CLONE_BTN_FLAG = 'data-cx-clone-trigger'
 // web-startup-auth 环境组合,未装时基座按钮无反应,此按钮为独立可用入口
 // (生产有 auth 环境同为快捷入口,行为一致不做环境探测)
 const HEADER_CLONE_BTN_FLAG = 'data-cx-clone-header-btn'
-const HEADER_CLONE_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><path d="M8 2v7.5M5 7l3 3 3-3M2.5 10.5v2A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5v-2"/></svg>'
+const HEADER_CLONE_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><path d="M4 2v8"/><circle cx="12" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><path d="M12 6a6 6 0 0 1-6 6"/></svg>'
 // 官方浏览目录弹窗识别:含面包屑导航(role=navigation)的 dialog 卡片即唯一;
 // 新建文件夹子弹窗无导航,天然排除
 const BROWSE_NAV_SELECTOR = '[role="dialog"]'

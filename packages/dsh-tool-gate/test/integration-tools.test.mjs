@@ -143,7 +143,13 @@ test('SC-24 tool_search 不改变其他会话或本会话的工具加载态', as
   const { root, agentA, agentB, search } = await bootScopes(t)
   const beforeA = root.tools.schemas(agentA)
   const beforeB = root.tools.schemas(agentB)
-  await search(agentA, '^only_a$')
+  const outcome = await root.tools.execute({
+    callId: 'scope-A-search', name: 'tool_search', arguments: { pattern: '^only_a$' },
+    agent: agentA, signal: new AbortController().signal,
+  })
+  assert.equal(outcome.isError, false, JSON.stringify(outcome))
+  assert.equal(outcome.value.count, 1)
+  assert.ok(outcome.value.text.includes('only_a'))
   assert.deepEqual(root.tools.schemas(agentA), beforeA)
   assert.deepEqual(root.tools.schemas(agentB), beforeB)
   assert.equal(root.tools.get('only_a', agentA).deferLoading, true)

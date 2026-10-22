@@ -1539,6 +1539,9 @@ function ensureHeaderCloneButton(doc, onOpen, allowed) {
     // disabled 镜像:基座重渲染会重建按钮并重置镜像,条件写跟进
     const next = addBtn.disabled
     if (existing.disabled !== next) { existing.disabled = next; touched = true }
+    // 容器宽度护栏:官方样式对 headerActions 硬编码 max-width(仅容 2 图标)+
+    // overflow:hidden,第 3 个图标会被整体裁掉;条件写解除,隐藏分支回落原状
+    if (addBtn.parentElement.style.maxWidth !== 'none') { addBtn.parentElement.style.maxWidth = 'none'; touched = true }
     return touched
   }
   const button = doc.createElement('button')
@@ -1552,6 +1555,7 @@ function ensureHeaderCloneButton(doc, onOpen, allowed) {
   button.disabled = addBtn.disabled
   button.addEventListener('click', onOpen)
   addBtn.parentElement.insertBefore(button, addBtn.nextSibling)
+  addBtn.parentElement.style.maxWidth = 'none'
   return true
 }
 function readMemory(key) {

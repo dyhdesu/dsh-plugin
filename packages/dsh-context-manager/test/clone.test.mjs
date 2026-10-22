@@ -477,6 +477,7 @@ test('Given 工作区 header, When ensureHeaderCloneButton, Then 注入添加按
   addBtn.className = 'icon-btn'
   const holder = {
     children: [addBtn],
+    style: {},
     querySelector(selector) {
       if (selector === 'button[aria-label=添加工作区]') return addBtn
       if (selector.includes('data-cx-clone-header-btn')) return this.children.find((c) => c.attrs && 'data-cx-clone-header-btn' in c.attrs) ?? null
@@ -506,6 +507,7 @@ test('Given 工作区 header, When ensureHeaderCloneButton, Then 注入添加按
   assert.ok(!('data-plugin' in injected.attrs), '按钮不得带 data-plugin(宿主样式 claim 会把它当插件节点回收)')
   assert.equal(injected.className, 'icon-btn', '克隆邻居按钮类名(原生视觉)')
   assert.equal(injected.disabled, false, '镜像添加按钮可用态')
+  assert.equal(holder.style.maxWidth, 'none', '必须解除 headerActions 的 max-width 裁剪(官方 60px 只容 2 图标)')
   const again = ensure(doc, () => {})
   assert.equal(again, false, '幂等:无变化不写(条件写防变异环)')
 

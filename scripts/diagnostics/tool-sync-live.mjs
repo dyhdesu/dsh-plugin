@@ -112,7 +112,9 @@ async function main() {
   home = path.join(work, 'home')
   const profile = path.join(home, 'profiles/web')
   await fs.mkdir(path.join(profile, 'node_modules/@mzzsfy'), { recursive: true })
-  await fs.cp(browserSource, path.join(profile, 'node_modules/dsh-browser-cdp'), { recursive: true })
+  await fs.cp(browserSource, path.join(profile, 'node_modules/dsh-browser-cdp'), { recursive: true,
+    filter: source => !path.relative(browserSource, source).split(path.sep).some(part => ['node_modules', '.git'].includes(part)),
+  })
   const targetGate = path.join(profile, 'node_modules/@mzzsfy/dsh-tool-gate')
   await fs.mkdir(targetGate)
   for (const entry of ['src', 'package.json', 'cordis.patch.yml']) await fs.cp(path.join(repo, 'packages/dsh-tool-gate', entry), path.join(targetGate, entry), { recursive: true })
@@ -166,6 +168,7 @@ async function main() {
   await echo('/control/default', 'PUT', { text: 'TOOL_SYNC_FINISHED' })
   await prompt(a, 'SYNC_A_BASELINE')
   const baseline = await prompt(b, 'SYNC_B_BASELINE')
+  assert.deepEqual(bcdp(baseline), ['bcdp_doctor', 'bcdp_help', 'bcdp_navigate', 'bcdp_script', 'bcdp_snapshot', 'bcdp_space', 'bcdp_status'])
   assert.ok(bcdp(baseline).includes('bcdp_doctor'), '完整browser插件未注册doctor')
   assert.ok(!bcdp(baseline).includes('bcdp_click'), '冷启动已激活click，基线无效')
   if (gate) {
@@ -181,6 +184,29 @@ async function main() {
   const called = await tool(a, 'bcdp_doctor', {}, 'SYNC_A_DOCTOR')
   const afterCall = await prompt(b, 'SYNC_B_AFTER_DOCTOR')
   const added = bcdp(afterCall).filter(n => !bcdp(baseline).includes(n))
+  if (process.argv.includes('--assert-isolated')) {
+    assert.deepEqual(afterCall.requests.at(-1).tools, baseline.requests.at(-1).tools, 'A调用doctor改变了B的实际tools数组')
+    assert.equal(bcdp(called).length, 24, 'A自身应解锁第一批')
+    assert.equal(afterCall.events.some(e => e.type === 'developer/message' && e.data.message?.content?.some(b => b.type === 'tool-addition')), false)
+    const second = await tool(a, 'bcdp_help', {}, 'SYNC_A_SECOND')
+    assert.equal(bcdp(second).length, 28)
+    assert.deepEqual(bcdp(second).filter(n => !bcdp(called).includes(n)), ['bcdp_js', 'bcdp_page_info', 'bcdp_read_element', 'bcdp_screenshot'])
+    const third = await tool(a, 'bcdp_help', {}, 'SYNC_A_THIRD')
+    assert.equal(bcdp(third).length, 29)
+    assert.deepEqual(bcdp(third).filter(n => !bcdp(second).includes(n)), ['bcdp_wait'])
+    const bStill = await prompt(b, 'SYNC_B_STILL_COLD')
+    assert.deepEqual(bStill.requests.at(-1).tools, baseline.requests.at(-1).tools)
+    const c = (await rpc('session/create', { request: { cwd: workspace } })).sessionId
+    const cCold = await prompt(c, 'SYNC_C_NEW_COLD')
+    assert.deepEqual(cCold.requests.at(-1).tools, baseline.requests.at(-1).tools)
+    const bFirst = await tool(b, 'bcdp_help', {}, 'SYNC_B_FIRST_OWN_CALL')
+    assert.equal(bcdp(bFirst).length, 24, 'B第一次活动必须从第一批开始')
+    const aStill = await prompt(a, 'SYNC_A_UNAFFECTED_BY_B')
+    assert.deepEqual(aStill.requests.at(-1).tools, third.requests.at(-1).tools)
+    evidence.result = { isolated: true, aCounts: [bcdp(called).length, bcdp(second).length, bcdp(third).length], bFirstCount: bcdp(bFirst).length, newSessionCount: bcdp(cCold).length }
+    console.log(JSON.stringify({ gate, ...evidence.result }))
+    return
+  }
   assert.ok(added.includes('bcdp_click'), '实际doctor调用后B未新增click，原假设不成立')
   assert.equal(added.length, 17, `新增工具与17项预期不符：${JSON.stringify(added)}`)
   const notices = afterCall.events.filter(e => e.type === 'developer/message').flatMap(e => e.data.message?.content ?? [])

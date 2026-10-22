@@ -438,13 +438,14 @@ test('Given 官方弹窗结构, When findBrowseFooter 逻辑, Then 定位打开�
   assert.equal(findFooter(thinCard), null, '按钮不足 3 的 footer 应返回 null')
 })
 
-test('Given 注入循环, When setupCloneInjection, Then header 许可由首次点击行为探测(委托捕获/弹窗判定窗/默认隐藏)而非环境猜测', () => {
-  assert.ok(CLIENT_SRC.includes('const armClickProbe'), '必须有 armClickProbe 点击探测')
-  assert.ok(CLIENT_SRC.includes("target.closest('button[aria-label=添加工作区]')"), '探测必须委托捕获基座添加按钮点击')
-  assert.ok(/setTimeout\(\(\) => \{[^}]*findBrowseDialog\(doc\)[^}]*\}, 600\)/.test(CLIENT_SRC.replace(/\n/g, ' ')), '探测必须以弹窗出现与否为判据(600ms 窗)')
-  assert.match(CLIENT_SRC, /let headerAllowed = false/, 'header 许可默认关闭(弹窗可用环境保持 3 按钮布局)')
-  assert.match(CLIENT_SRC, /headerAllowed = true\n\s*rescan\(\)/, '探测未见到弹窗时仅注入常驻兜底按钮(不替用户打开克隆弹窗)')
-  assert.ok(!CLIENT_SRC.includes('headerEntry'), '不得再依赖宿主 headerEntry 字段(静态环境归因已证伪)')
+test('Given 注入循环, When setupCloneInjection, Then header 默认注入并轮询 /login 探测闸门,命中即移除还原 3 按钮布局', () => {
+  assert.ok(CLIENT_SRC.includes('const armAuthProbe'), '必须有 armAuthProbe 登录闸门轮询')
+  assert.match(CLIENT_SRC, /let headerAllowed = true/, '默认注入第 4 按钮(无闸门环境零延迟有入口)')
+  assert.match(CLIENT_SRC, /fetch\('\/login', \{ credentials: 'omit' \}\)/, '探测信号=/login 排他性路由(闸门 200/裸宿主 404)')
+  assert.match(CLIENT_SRC, /headerProbeRounds >= HEADER_PROBE_ROUNDS/, '探测窗口封顶,超时按钮常驻')
+  assert.match(CLIENT_SRC, /headerAllowed = false\n\s+clearInterval\(headerProbeTimer\)\n\s+headerProbeTimer = null\n\s+removeAllHeader\(\)/, '命中闸门即停探测并物理移除按钮')
+  assert.ok(!CLIENT_SRC.includes('armClickProbe'), '不得再用点击行为探测(要求用户先点一次才出按钮)')
+  assert.ok(!CLIENT_SRC.includes('headerEntry'), '不得依赖宿主 headerEntry 字段(静态环境归因已证伪)')
   assert.ok(!CLIENT_SRC.includes('dsh-web-startup-auth'), 'client 不得引用 auth 包名(归因不可靠)')
 })
 

@@ -1738,28 +1738,36 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
   let writes = 0
   let windowStart = Date.now()
   let observer = null
-  // header 兜底入口许可:官方浏览弹窗环境保持 3 按钮布局,克隆入口只在弹窗
-  // footer;弹窗打不开的环境(基座按钮点击无反应)首次点击即探测——委托捕获
-  // 监听,弹窗未出现则静默注入第 4 按钮常驻兜底。不替用户打开克隆弹窗:用户
-  // 点「添加工作区」的意图是创建工作区,环境坏不该改变按钮语义;环境归因
-  // (auth 或其它)不可静态判定,用户首次真实点击是最可靠的行为信号
-  let headerAllowed = false
-  let probeArmed = false
-  const armClickProbe = () => {
-    if (probeArmed || disposed) return
-    probeArmed = true
-    doc.documentElement.addEventListener('click', (event) => {
-      if (disposed || headerAllowed) return
-      const target = event.target
-      const btn = target && target.closest ? target.closest('button[aria-label=添加工作区]') : null
-      if (!btn) return
-      setTimeout(() => {
-        if (disposed || headerAllowed) return
-        if (findBrowseDialog(doc)) return
-        headerAllowed = true
-        rescan()
-      }, 600)
-    }, true)
+  // header 兜底入口:默认注入(无闸门环境基座按钮无反应,第 4 按钮是唯一入口),
+  // 启动后轮询探测登录闸门——`/login` 是 auth 包的排他性路由,带闸门宿主返回
+  // 200,无闸门宿主 404;命中即物理移除按钮还原官方 3 按钮布局,克隆入口收敛到
+  // 浏览弹窗 footer。探测窗口 30s 封顶(每秒一次),超时未见闸门则按钮常驻
+  let headerAllowed = true
+  const HEADER_PROBE_INTERVAL_MS = 1000
+  const HEADER_PROBE_ROUNDS = 30
+  let headerProbeTimer = null
+  let headerProbeRounds = 0
+  const armAuthProbe = () => {
+    if (typeof fetch !== 'function' || headerProbeTimer) return
+    const probe = () => {
+      if (disposed || !headerAllowed) { clearInterval(headerProbeTimer); headerProbeTimer = null; return }
+      headerProbeRounds += 1
+      fetch('/login', { credentials: 'omit' })
+        .then((res) => {
+          if (disposed || !headerAllowed) return
+          if (res.ok) {
+            headerAllowed = false
+            clearInterval(headerProbeTimer)
+            headerProbeTimer = null
+            removeAllHeader()
+            rescan()
+          }
+        })
+        .catch(() => {})
+      if (headerProbeRounds >= HEADER_PROBE_ROUNDS) { clearInterval(headerProbeTimer); headerProbeTimer = null }
+    }
+    probe()
+    headerProbeTimer = setInterval(probe, HEADER_PROBE_INTERVAL_MS)
   }
   // header 按钮被外部(基座重渲染卸载/早期净化)移除时指数退避重试;重试由
   // setTimeout 主动调度——静置期无变异驱动 observer,被动等变异会死锁在退避期
@@ -1781,7 +1789,8 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
     return removedAny
   }
   const ensureHeader = (now) => {
-    // 探测未通过(headerAllowed=false)时隐藏兜底按钮,保持官方 3 按钮布局
+    // 探测到登录闸门(headerAllowed=false)后保持官方 3 按钮布局:按钮已物理
+    // 移除,基座重渲染也不会再注入
     if (!headerAllowed) return ensureHeaderCloneButton(doc, onOpen, false)
     const floatingPresent = !!doc.querySelector('[' + HEADER_CLONE_BTN_FLAG + ']')
     if (headerInjected && !floatingPresent) {
@@ -1834,10 +1843,11 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
   // disabled 属性观察:空目录导航完成后无 childList 变异,打开按钮的可用态
   // 翻转只有属性事件;镜像写入是条件写(值不变不落属性),不构成变异环
   observer.observe(doc.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] })
-  armClickProbe()
+  armAuthProbe()
   rescan()
   return () => {
     disposed = true
+    if (headerProbeTimer) clearInterval(headerProbeTimer)
     if (headerRetryTimer) clearTimeout(headerRetryTimer)
     if (observer) observer.disconnect()
     removeAll()

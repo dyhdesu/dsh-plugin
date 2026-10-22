@@ -48,4 +48,25 @@ node scripts/diagnostics/tool-sync-live.mjs --assert-isolated --without-gate
 
 最终完整构建测试证据：[有门](<C:/Users/yuanhao/AppData/Local/Temp/dsh-tool-sync-live-frsWAt/evidence.json>)、[无门](<C:/Users/yuanhao/AppData/Local/Temp/dsh-tool-sync-live-zm7Pr0/evidence.json>)；应用器实际产物另经[完整宿主验证](<C:/Users/yuanhao/AppData/Local/Temp/dsh-tool-sync-live-lBuUo6/evidence.json>)。临时目录可能被系统清理，可按上述命令重跑。
 
-测试未覆盖真实浏览器页面操作、GUI 交互或原生 DeepSeek 服务端激活；只确认已定位的 browser lazy 跨会话注册路径已在修复构建中消失。
+工具隔离测试未覆盖真实浏览器页面操作或原生 DeepSeek 服务端激活；只确认已定位的 browser lazy 跨会话注册路径已在修复构建中消失。GUI 检查限于下面的页面加载、控制台与插件管理状态。
+
+## 安装后完整验证
+
+2026-10-22 再次使用当前安装包运行，不依赖前一轮结果：
+
+| 验证 | 命令或方式 | 本轮结果 |
+|---|---|---|
+| 浏览器插件全量套件 | 源码目录 `npm test` | 58 个文件通过，5 个文件跳过；871 项通过、12 项跳过、0 失败 |
+| 宿主和客户端类型 | 源码目录 `npm run typecheck` | 两个 tsconfig 均通过 |
+| 工具门全量套件 | 工具门目录 `node --test "test/*.test.mjs"` | 77 项通过，0 跳过、0 失败 |
+| 当前安装包，有门 | `tool-sync-live.mjs --assert-isolated` | 完整请求数组隔离断言通过 |
+| 当前安装包，无门 | 同上加 `--without-gate` | 完整请求数组隔离断言通过 |
+| 安装与测试身份 | 安装入口、源码构建、两个隔离副本分别计算 SHA-256 | 全部匹配清单 patchedSha256：`ec6715c9e6ce205bb5c8c2d0d72705b39820d03461cf9d7e954013da4d50f47d` |
+| 当前 GUI | localhost 页面刷新后只读查询插件管理 | browser 和 tool-gate 均 enabled/active，无 Failed to load plugins 页面 |
+| 残余资源 | 两套实验各检查两次 PID 和端口 | 进程退出、端口释放；隔离宿主日志无 warn/error 匹配 |
+
+12 项跳过是上游测试的显式环境开关：登录导入 5 项、远端 CDP 4 项、Lightpanda 1 项、本地 CLI 1 项、渲染探针 1 项。本轮未开启这些外部环境测试，也未操作真实登录数据；不能把跳过记为通过。全量测试打印的 family-host 警告来自断言中的容器接管/撤回场景；npm 另提示现有 pnpm 专属配置键不被 npm 识别，未导致测试或类型检查失败。
+
+本轮完整宿主证据：[有门](<C:/Users/yuanhao/AppData/Local/Temp/dsh-tool-sync-live-aYQYhe/evidence.json>)、[无门](<C:/Users/yuanhao/AppData/Local/Temp/dsh-tool-sync-live-hbcoGw/evidence.json>)。两套均 `ok: true, cleanupOk: true`；A 为 24/28/29，B/C 保持 7，B 自己首次调用才为 24。
+
+当前宿主另外两行 `pwsh-sandbox`、`turn-notify` 仍为 failed，与此前重载警告一致；本轮只读确认，没有改这两行。刷新后控制台捕获到 browser family container 接管 warning，没有捕获 error。本轮结论是该跨会话注册修复通过上述回归，不能据此宣称整个宿主所有插件正常。本轮未改生产配置、未重启宿主、未向生产发送测试对话。

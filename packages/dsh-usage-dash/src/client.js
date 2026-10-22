@@ -2056,7 +2056,8 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
 .ud-pricing-actions{display:flex;align-items:center;gap:8px}
 .ud-rule-add{border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);padding:8px;font-size:12px;cursor:pointer}
 .ud-rule-add:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
-.ud-statsline-root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;width:100%;padding:4px calc(var(--dsh-composer-side-clearance) + 16px) 0px;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;margin:0 auto;display:block;overflow:hidden}
+/* dock 内并列条目:官方 pill 满宽不动,空间不足时高收缩因子让自身先收缩(min-width:0 配合 ellipsis),挤压力不转嫁官方 */
+.ud-statsline-root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;flex:0 999 auto;min-width:0;padding:0 8px;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;margin:0;display:block;overflow:hidden}
 .ud-statsline-sep{color:var(--dsw-alias-separator-primary);margin:0 10px}
 /* 芯片 portal 至动作行末尾,历史轮悬停/焦点显隐随父级 data-actions-reveal,无需自绘规则 */
 .ud-turn-cost{font-size:var(--dsh-content-font-size-secondary,13px);color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:${TURN_COST_GAP_PX}px}

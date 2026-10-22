@@ -261,3 +261,14 @@ test('dock 注册 append 契约:order 排官方 pill(activity 0/usage 1)之后,�
   assert.ok(!CLIENT_BODY.includes("useProjection('sessionStats')"))
   assert.ok(!CLIENT_BODY.includes('deriveStats'))
 })
+
+test('dock append 条目布局契约:官方 pill 满宽不受挤压,空间不足时增强条目先让位', () => {
+  // 失效方式:回退为整行 width:100% 或去掉让位收缩/截断,官方胶囊被压缩或被溢出文本遮挡(独立环境实测 147→96px)
+  const rule = CLIENT_BODY.match(/\.ud-statsline-root\{[^}]*\}/)?.[0]
+  assert.ok(rule, '存在 .ud-statsline-root 规则')
+  assert.ok(!/(^|[^-a-z])width:100%/.test(rule), '不再整行占满,dock 内为并列条目')
+  assert.ok(!rule.includes('--dsh-composer-side-clearance'), '不再沿用整行侧边距')
+  assert.ok(rule.includes('flex:0 999 auto'), '高收缩因子锁定,空间不足时先收缩自身,挤压亏损不由官方 pill 承担')
+  assert.ok(rule.includes('min-width:0'), '允许收缩到零')
+  assert.ok(rule.includes('overflow:hidden') && rule.includes('white-space:nowrap') && rule.includes('text-overflow:ellipsis'), '收缩残态截断三件套在位,溢出不遮挡官方 pill')
+})

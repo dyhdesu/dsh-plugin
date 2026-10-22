@@ -350,7 +350,7 @@ test('Given client.js 装配面, When apply, Then inject 含 uiWorkspace(实测�
   const modules = []
   const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
   const reactStub = { useState: (v) => [v, () => {}], useEffect: () => {}, useRef: (v) => ({ current: v }), createElement: () => null }
-  const requireStub = (name) => (name === '@mzzsfy/dsh-toast/client' ? { show: () => 0 } : reactStub)
+  const requireStub = (name) => (name === '@mzzsfy/dsh-common-tools/client' ? { toast: { show: () => 0 } } : reactStub)
   const factory = new Function('window', 'require', 'document', CLIENT_SRC + '\n;return null')
   factory(windowStub, requireStub, { createElement: () => ({ style: {}, remove() {} }), head: { appendChild: () => {} }, body: { appendChild: () => {} } })
   const mod = modules[0].factory(requireStub)
@@ -438,8 +438,18 @@ test('Given 官方弹窗结构, When findBrowseFooter 逻辑, Then 定位打开�
   assert.equal(findFooter(thinCard), null, '按钮不足 3 的 footer 应返回 null')
 })
 
-test('Given 工作区 header, When ensureHeaderCloneButton, Then 注入添加按钮旁克隆邻居类名;幂等条件写;邻居缺失隐藏', () => {
-  const declared = CLIENT_SRC.match(/function ensureHeaderCloneButton\(doc, onOpen\) \{[\s\S]*?\n\}/)
+test('Given 注入循环, When setupCloneInjection, Then header 许可由首次点击行为探测(委托捕获/弹窗判定窗/默认隐藏)而非环境猜测', () => {
+  assert.ok(CLIENT_SRC.includes('const armClickProbe'), '必须有 armClickProbe 点击探测')
+  assert.ok(CLIENT_SRC.includes("target.closest('button[aria-label=添加工作区]')"), '探测必须委托捕获基座添加按钮点击')
+  assert.ok(/setTimeout\(\(\) => \{[^}]*findBrowseDialog\(doc\)[^}]*\}, 600\)/.test(CLIENT_SRC.replace(/\n/g, ' ')), '探测必须以弹窗出现与否为判据(600ms 窗)')
+  assert.match(CLIENT_SRC, /let headerAllowed = false/, 'header 许可默认关闭(弹窗可用环境保持 3 按钮布局)')
+  assert.match(CLIENT_SRC, /headerAllowed = true\n\s*onOpen\(\)/, '探测未见到弹窗时注入许可并直接打开克隆弹窗')
+  assert.ok(!CLIENT_SRC.includes('headerEntry'), '不得再依赖宿主 headerEntry 字段(静态环境归因已证伪)')
+  assert.ok(!CLIENT_SRC.includes('dsh-web-startup-auth'), 'client 不得引用 auth 包名(归因不可靠)')
+})
+
+test('Given 工作区 header, When ensureHeaderCloneButton, Then 注入添加按钮旁克隆邻居类名;幂等条件写;邻居缺失隐藏;auth 在场强制隐藏', () => {
+  const declared = CLIENT_SRC.match(/function ensureHeaderCloneButton\(doc, onOpen, allowed\) \{[\s\S]*?\n\}/)
   assert.ok(declared, 'client.js 必须内联声明 ensureHeaderCloneButton')
   const flagDecl = CLIENT_SRC.match(/const HEADER_CLONE_BTN_FLAG = '([^']+)'/)
   const iconDecl = CLIENT_SRC.match(/const HEADER_CLONE_ICON = '([\s\S]+?)'\n/)
@@ -513,4 +523,9 @@ test('Given 工作区 header, When ensureHeaderCloneButton, Then 注入添加按
   assert.equal(injected.style.display, 'none', '应隐藏注入按钮')
   assert.equal(ensure(doc, () => {}), true, '复显发生写入')
   assert.notEqual(injected.style.display, 'none', '邻居恢复后应复显')
+
+  // auth 在场(allowed=false):强制隐藏已注入按钮,保持官方 3 按钮布局
+  assert.equal(ensure(doc, () => {}, false), true, 'auth 在场发生隐藏写入')
+  assert.equal(injected.style.display, 'none', 'auth 在场应隐藏注入按钮')
+  assert.equal(ensure(doc, () => {}, false), false, 'auth 在场隐藏幂等')
 })

@@ -28,11 +28,11 @@ window.__ModuleLoader__.load({
     else if (Array.isArray(window.__navicIconQueue)) window.__navicIconQueue.push(NAV_ICON)
     else window.__navicIconQueue = [NAV_ICON]
 
-    // 通知出口:公共依赖 @mzzsfy/dsh-toast 可选消费(占位条目全仓唯一,由
+    // 通知出口:公共依赖 @mzzsfy/dsh-common-tools 可选消费(占位条目全仓唯一,由
     // dsh-session-manager 代挂;模块表缺失或导出缺 show 即通知通道置空)
     let toast = () => {}
     try {
-      toast = require('@mzzsfy/dsh-toast/client').show || (() => {})
+      toast = require('@mzzsfy/dsh-common-tools/client').toast.show || (() => {})
     } catch {
       toast = () => {}
     }
@@ -1519,9 +1519,15 @@ function ensureCloneButton(doc, footerParts, onOpen) {
 // 插进 headerActions 会被基座 React 重渲染反复卸载,注入→卸载→再注入自激成
 // 变异风暴(隔离环境实测);body 直挂节点 React 管不到,位置校正用条件写
 // (值不变不落样式),稳态零变异
-function ensureHeaderCloneButton(doc, onOpen) {
+function ensureHeaderCloneButton(doc, onOpen, allowed) {
   const existing = doc.querySelector('[' + HEADER_CLONE_BTN_FLAG + ']')
   const addBtn = doc.querySelector('button[aria-label=添加工作区]')
+  if (allowed === false) {
+    // auth 在场:header 保持官方布局,隐藏(而非移除)已注入按钮,状态翻转可复显
+    if (!existing) return false
+    if (existing.style.display !== 'none') { existing.style.display = 'none'; return true }
+    return false
+  }
   if (!addBtn || !addBtn.parentElement) {
     if (!existing) return false
     if (existing.style.display !== 'none') existing.style.display = 'none'
@@ -1732,6 +1738,28 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
   let writes = 0
   let windowStart = Date.now()
   let observer = null
+  // header 兜底入口许可:官方浏览弹窗环境保持 3 按钮布局,克隆入口只在弹窗
+  // footer;弹窗打不开的环境(基座按钮点击无反应)首次点击即探测——委托捕获
+  // 监听,弹窗未出现则当场注入第 4 按钮并直接打开克隆弹窗。环境归因(auth 或
+  // 其它)不可静态判定,用户首次真实点击是最可靠的行为信号
+  let headerAllowed = false
+  let probeArmed = false
+  const armClickProbe = () => {
+    if (probeArmed || disposed) return
+    probeArmed = true
+    doc.documentElement.addEventListener('click', (event) => {
+      if (disposed || headerAllowed) return
+      const target = event.target
+      const btn = target && target.closest ? target.closest('button[aria-label=添加工作区]') : null
+      if (!btn) return
+      setTimeout(() => {
+        if (disposed || headerAllowed) return
+        if (findBrowseDialog(doc)) return
+        headerAllowed = true
+        onOpen()
+      }, 600)
+    }, true)
+  }
   // header 按钮被外部(基座重渲染卸载/早期净化)移除时指数退避重试;重试由
   // setTimeout 主动调度——静置期无变异驱动 observer,被动等变异会死锁在退避期
   let headerInjected = false
@@ -1752,6 +1780,8 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
     return removedAny
   }
   const ensureHeader = (now) => {
+    // 探测未通过(headerAllowed=false)时隐藏兜底按钮,保持官方 3 按钮布局
+    if (!headerAllowed) return ensureHeaderCloneButton(doc, onOpen, false)
     const floatingPresent = !!doc.querySelector('[' + HEADER_CLONE_BTN_FLAG + ']')
     if (headerInjected && !floatingPresent) {
       headerBackoffMs = Math.min(headerBackoffMs * 2, 30 * 1000)
@@ -1803,6 +1833,7 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
   // disabled 属性观察:空目录导航完成后无 childList 变异,打开按钮的可用态
   // 翻转只有属性事件;镜像写入是条件写(值不变不落属性),不构成变异环
   observer.observe(doc.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] })
+  armClickProbe()
   rescan()
   return () => {
     disposed = true

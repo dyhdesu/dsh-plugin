@@ -16,7 +16,6 @@ const {
   formatTokensCompact,
   formatDuration,
   formatTokensPerSecond,
-  buildStatsGroups,
   buildCostItem,
   createStatsLineState,
   createTranslator,
@@ -49,19 +48,15 @@ function fakeStorage(initial = {}) {
 
 test('stats 词典关键值逐字节,en 族逐字节', () => {
   assert.equal(STATS_LINE_STORAGE_KEY, 'dsh-usage-dash:stats-line')
-  assert.equal(MESSAGES_ZH['stats.cacheHit'], '缓存命中 {percent}%')
   assert.equal(MESSAGES_ZH['stats.tokens'], '输入 {input} tok · 输出 {output} tok')
-  assert.equal(MESSAGES_ZH['stats.tokensDetail'], '总 {total} tok · 输入 {input} tok · 命中缓存 {hit} tok · 未命中缓存 {miss} tok · 输出 {output} tok')
   assert.equal(MESSAGES_ZH.cachePrecision, '精确缓存命中率')
-  assert.equal(MESSAGES_ZH.cachePrecisionDesc, '在会话底部信息栏以两位小数显示缓存命中率。')
+  assert.equal(MESSAGES_ZH.cachePrecisionDesc, '将官方用量胶囊及弹窗中的命中率显示为两位小数。')
   assert.equal(MESSAGES_ZH.tokenDetail, '会话 Token 明细')
-  assert.equal(MESSAGES_ZH.tokenDetailDesc, '在会话底部信息栏显示总 Token、命中/未命中缓存与输出明细。')
+  assert.equal(MESSAGES_ZH.tokenDetailDesc, '在官方 Token 用量弹窗末尾追加含缓存输入合计；存在缓存写入时追加未命中合计。')
   assert.equal(MESSAGES_ZH['stats.cost'], '费用 ≈ {cost}')
   assert.equal(MESSAGES_ZH.costDisplay, '费用显示')
   assert.equal(MESSAGES_EN['stats.cost'], 'Cost ≈ {cost}')
   assert.equal(MESSAGES_EN.costDisplay, 'Cost display')
-  assert.equal(MESSAGES_EN['stats.cacheHit'], 'Cache hit {percent}%')
-  assert.equal(MESSAGES_EN['stats.tokensDetail'], 'Total {total} tok · Input {input} tok · Cache hit {hit} tok · Cache miss {miss} tok · Output {output} tok')
   assert.equal(MESSAGES_ZH['duration.compactSeconds'], '{seconds}秒')
   assert.equal(MESSAGES_ZH['duration.compactMinutes'], '{minutes}分{seconds}秒')
   assert.equal(MESSAGES_ZH['number.thousand'], '{value}K')
@@ -103,57 +98,6 @@ test('formatTokensPerSecond 钳负值且阈值上下分别取整', () => {
   assert.equal(formatTokensPerSecond(9.96), '10')
   assert.equal(formatTokensPerSecond(150), '150')
   assert.equal(formatTokensPerSecond(3.24), '3.2')
-})
-
-test('buildStatsGroups 开关全关为空数组:官方数据由官方 pill 渲染,插件不重复', () => {
-  assert.deepEqual(buildStatsGroups(USAGE, PREFS_OFF, zhT), [])
-})
-
-test('buildStatsGroups append 默认形态:精确命中率与五项明细', () => {
-  assert.deepEqual(buildStatsGroups(USAGE, { cachePrecision: true, tokenDetail: true }, zhT), [
-    '缓存命中 80.00%',
-    '总 5.5K tok · 输入 5K tok · 命中缓存 4K tok · 未命中缓存 1K tok · 输出 500 tok',
-  ])
-})
-
-test('buildStatsGroups 传 en 翻译器输出 en 口径', () => {
-  assert.deepEqual(buildStatsGroups(USAGE, { cachePrecision: true, tokenDetail: true }, enT), [
-    'Cache hit 80.00%',
-    'Total 5.5K tok · Input 5K tok · Cache hit 4K tok · Cache miss 1K tok · Output 500 tok',
-  ])
-})
-
-test('buildStatsGroups cachePrecision 关时无命中率组,官方整数版承担', () => {
-  assert.deepEqual(buildStatsGroups(USAGE, { cachePrecision: false, tokenDetail: true }, zhT), [
-    '总 5.5K tok · 输入 5K tok · 命中缓存 4K tok · 未命中缓存 1K tok · 输出 500 tok',
-  ])
-})
-
-test('buildStatsGroups tokenDetail 关时无明细组', () => {
-  assert.deepEqual(buildStatsGroups(USAGE, { cachePrecision: true, tokenDetail: false }, zhT), [
-    '缓存命中 80.00%',
-  ])
-})
-
-test('buildStatsGroups en 零命中率呈现 Cache hit 0.00%', () => {
-  const zeroHitUsage = { uncachedInputTokens: 4000, cacheReadTokens: 0, cacheWriteTokens: 1000, outputTokens: 0 }
-  assert.deepEqual(buildStatsGroups(zeroHitUsage, { cachePrecision: true, tokenDetail: true }, enT), [
-    'Cache hit 0.00%',
-    'Total 5K tok · Input 5K tok · Cache hit 0 tok · Cache miss 5K tok · Output 0 tok',
-  ])
-})
-
-test('buildStatsGroups usage 缺席或全零为空数组', () => {
-  const prefsOn = { cachePrecision: true, tokenDetail: true }
-  assert.deepEqual(buildStatsGroups(undefined, prefsOn, zhT), [])
-  assert.deepEqual(buildStatsGroups({ uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 }, prefsOn, zhT), [])
-})
-
-test('buildStatsGroups 仅输出时命中率因无分母丢弃,明细保留', () => {
-  const usage = { uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 500 }
-  assert.deepEqual(buildStatsGroups(usage, { cachePrecision: true, tokenDetail: true }, zhT), [
-    '总 500 tok · 输入 0 tok · 命中缓存 0 tok · 未命中缓存 0 tok · 输出 500 tok',
-  ])
 })
 
 test('createStatsLineState 默认三开,非法 JSON 回落三开,显式 false 才视为关', () => {
@@ -245,16 +189,6 @@ test('buildCostItem usage 缺席为 null', () => {
   assert.equal(buildCostItem(undefined, COST_RULES, PREFS_COST_ON, zhT, COST_NOW), null)
 })
 
-test('buildStatsGroups 费用组符号同全局口径,append 开关下费用为唯一组', () => {
-  assert.deepEqual(buildStatsGroups(COST_USAGE, PREFS_COST_ON, zhT, COST_RULES), [
-    '费用 ≈ ¥0.50',
-  ])
-})
-
-test('buildStatsGroups 费用开+无价不追加费用组', () => {
-  assert.deepEqual(buildStatsGroups(COST_USAGE, PREFS_COST_ON, zhT, null), [])
-})
-
 test('dock 注册 append 契约:order 排官方 pill(activity 0/usage 1)之后,条目只消费 useProjection', () => {
   assert.ok(CLIENT_BODY.includes("id: 'stats', order: 2, priority: STATS_SLOT_PRIORITY"))
   assert.ok(CLIENT_BODY.includes('StatsLineAppended({ useProjection, t = defaultT })'))
@@ -269,6 +203,8 @@ test('dock append 条目布局契约:官方 pill 满宽不受挤压,空间不足
   assert.ok(!/(^|[^-a-z])width:100%/.test(rule), '不再整行占满,dock 内为并列条目')
   assert.ok(!rule.includes('--dsh-composer-side-clearance'), '不再沿用整行侧边距')
   assert.ok(rule.includes('flex:0 999 auto'), '高收缩因子锁定,空间不足时先收缩自身,挤压亏损不由官方 pill 承担')
+  assert.ok(rule.includes('padding:0;'), '费用收缩到零时不留下固定内边距挤压官方胶囊')
+  assert.ok(rule.includes('margin-left:calc(0px - var(--ud-dock-gap,0px))') && rule.includes('text-indent:var(--ud-dock-gap,0px)'), '抵消新增 flex gap，文字缩进提供可收缩间距')
   assert.ok(rule.includes('min-width:0'), '允许收缩到零')
   assert.ok(rule.includes('overflow:hidden') && rule.includes('white-space:nowrap') && rule.includes('text-overflow:ellipsis'), '收缩残态截断三件套在位,溢出不遮挡官方 pill')
 })

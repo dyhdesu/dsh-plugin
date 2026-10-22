@@ -246,14 +246,14 @@ const MESSAGES_ZH = {
   anomalyLog: '扫描异常日志',
   logKindSkipped: '跳过会话',
   logKindRecord: '写入失败',
-  'stats.cacheHit': '缓存命中 {percent}%',
+  'stats.inputTotal': '输入合计（含缓存）',
+  'stats.missTotal': '未命中合计（含缓存写入）',
   'stats.tokens': '输入 {input} tok · 输出 {output} tok',
   'turnCostChip': '{cost}',
-  'stats.tokensDetail': '总 {total} tok · 输入 {input} tok · 命中缓存 {hit} tok · 未命中缓存 {miss} tok · 输出 {output} tok',
   cachePrecision: '精确缓存命中率',
-  cachePrecisionDesc: '在会话底部信息栏以两位小数显示缓存命中率。',
+  cachePrecisionDesc: '将官方用量胶囊及弹窗中的命中率显示为两位小数。',
   tokenDetail: '会话 Token 明细',
-  tokenDetailDesc: '在会话底部信息栏显示总 Token、命中/未命中缓存与输出明细。',
+  tokenDetailDesc: '在官方 Token 用量弹窗末尾追加含缓存输入合计；存在缓存写入时追加未命中合计。',
   costDisplay: '费用显示',
   costDisplayDesc: '在信息栏、趋势悬浮与回合费用芯片中显示按当前费率估算的费用。',
   costTitle: '按当前费率对历史用量估算,精度为小时级',
@@ -389,14 +389,14 @@ const MESSAGES_EN = {
   anomalyLog: 'Scan anomaly log',
   logKindSkipped: 'skipped',
   logKindRecord: 'write failed',
-  'stats.cacheHit': 'Cache hit {percent}%',
+  'stats.inputTotal': 'Total input (including cache)',
+  'stats.missTotal': 'Total cache miss (including writes)',
   'stats.tokens': 'Input {input} tok · Output {output} tok',
   'turnCostChip': '{cost}',
-  'stats.tokensDetail': 'Total {total} tok · Input {input} tok · Cache hit {hit} tok · Cache miss {miss} tok · Output {output} tok',
   cachePrecision: 'Precise cache-hit rate',
-  cachePrecisionDesc: 'Show the cache-hit rate with two decimals in the session stats line.',
+  cachePrecisionDesc: 'Show two decimals in the official usage pill and Token usage dialog.',
   tokenDetail: 'Session token detail',
-  tokenDetailDesc: 'Show total, cache hit/miss and output tokens in the session stats line.',
+  tokenDetailDesc: 'Append total input including cache to the official Token usage dialog; add total cache misses when cache writes exist.',
   costDisplay: 'Cost display',
   costDisplayDesc: 'Show costs estimated at current rates in the stats line, trend tooltips and the turn cost chip.',
   costTitle: 'Estimated at current rates over historical usage, hourly precision',
@@ -1073,29 +1073,68 @@ function formatTokensPerSecond(tps) {
   return String(Math.round(clamped * NUMBER_ONE_DECIMAL) / NUMBER_ONE_DECIMAL)
 }
 
-// 分组装配(append 模式):官方 activity/usage pill 已承担轮步/时长/首token/速度/整数命中率/总量,
-// 本条目只渲染官方没有的增强项并追加在其后;开关关即不渲染对应增强项,全关时条目整体不渲染;
-// 费用组在末位追加:开关关/无用量/价格未加载不渲染,规则已载无命中价显示占位符
-function buildStatsGroups(usage, prefs, t, pricingRules = null) {
-  const groups = []
-  if (usage === undefined || (billedInputTokens(usage) === 0 && usage.outputTokens === 0)) return groups
-  if (prefs.cachePrecision) {
-    const percent = cacheHitPercentPrecise(usage)
-    if (percent !== null) groups.push(t('stats.cacheHit', { percent }))
-  }
+function buildUsageDialogRows(usage, prefs, t) {
+  if (!usage || billedInputTokens(usage) === 0) return []
+  const rows = []
   if (prefs.tokenDetail) {
-    const billed = billedInputTokens(usage)
-    groups.push(t('stats.tokensDetail', {
-      total: formatTokensCompact(billed + usage.outputTokens, t),
-      input: formatTokensCompact(billed, t),
-      hit: formatTokensCompact(usage.cacheReadTokens, t),
-      miss: formatTokensCompact(usage.uncachedInputTokens + usage.cacheWriteTokens, t),
-      output: formatTokensCompact(usage.outputTokens, t),
-    }))
+    rows.push({ key: 'input', label: t('stats.inputTotal'), value: `${formatTokens(billedInputTokens(usage))} tok` })
+    if (usage.cacheWriteTokens > 0) rows.push({ key: 'miss', label: t('stats.missTotal'), value: `${formatTokens(usage.uncachedInputTokens + usage.cacheWriteTokens)} tok` })
   }
-  const costItem = buildCostItem(usage, pricingRules, prefs, t)
-  if (costItem !== null) groups.push(costItem)
-  return groups
+  return rows
+}
+
+// 仅改写百分比文本，保留官方节点与事件；卸载时只还原仍由本次增强持有的值。
+function observeUsageDialog(anchor, document, Observer, onTarget, percent) {
+  let current
+  const changes = new Map()
+  const patch = (node, key, read, write) => {
+    const before = read()
+    if (typeof before !== 'string') return
+    const after = before.replace(/\d+(?:\.\d+)?%/g, `${percent}%`)
+    if (after === before) return
+    let fields = changes.get(node)
+    if (!fields) changes.set(node, fields = new Map())
+    fields.set(key, { before, after, read, write })
+    write(after)
+  }
+  const patchText = (element) => {
+    if (!element || percent === null) return
+    const walker = document.createTreeWalker(element, 4)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const textNode = node
+      patch(textNode, 'text', () => textNode.nodeValue, (value) => { textNode.nodeValue = value })
+    }
+  }
+  const releaseChanged = (records) => {
+    for (const record of records) {
+      const fields = changes.get(record.target)
+      if (record.type === 'characterData') fields?.delete('text')
+      if (record.type === 'attributes' && record.attributeName === 'aria-label') fields?.delete('aria')
+    }
+    for (const [node, fields] of changes) if (fields.size === 0 || !document.contains(node)) changes.delete(node)
+  }
+  const update = (records = []) => {
+    releaseChanged(records)
+    const pill = anchor?.closest('[data-slot="conversation.composer.dock"]')?.querySelector('[data-composer-stat="usage"]')
+    const button = pill?.querySelector('button')
+    patchText(pill)
+    if (button && percent !== null) patch(button, 'aria', () => button.getAttribute('aria-label'), (value) => button.setAttribute('aria-label', value))
+    const dialogs = document.querySelectorAll('[data-session-stats-usage]')
+    const next = button?.getAttribute('aria-expanded') === 'true' && dialogs.length === 1 ? dialogs[0] : null
+    patchText(next?.querySelector('dd'))
+    observer.takeRecords()
+    if (next !== current) { current = next; onTarget(next) }
+  }
+  const observer = new Observer(update)
+  observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['aria-expanded', 'aria-label'] })
+  update()
+  return () => {
+    releaseChanged(observer.takeRecords())
+    observer.disconnect()
+    for (const fields of changes.values()) for (const change of fields.values()) {
+      if (change.read() === change.after) change.write(change.before)
+    }
+  }
 }
 
 // usp stats-line 偏好状态工厂:storage 注入便于 Node 测试,读写全防御,内存值始终生效
@@ -1813,7 +1852,6 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
     // 遮蔽语义:同 id 同 priority 属注册冲突(注册表抛错),需取更低值压过
     // 同格竞争者;usp 同款接管注册用 -1,本插件取次低值,官方无显式 priority(默认 0)
     const STATS_SLOT_PRIORITY = -2
-    const STATS_LINE_TITLE_SEPARATOR = ' | '
     const VIEW_TABS = [
       { id: 'day', labelKey: 'viewDay' },
       { id: 'hour', labelKey: 'viewHour' },
@@ -2057,8 +2095,7 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
 .ud-rule-add{border:1px dashed var(--dsw-alias-border-l2);border-radius:8px;background:transparent;color:var(--dsw-alias-label-tertiary);padding:8px;font-size:12px;cursor:pointer}
 .ud-rule-add:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
 /* dock 内并列条目:官方 pill 满宽不动,空间不足时高收缩因子让自身先收缩(min-width:0 配合 ellipsis),挤压力不转嫁官方 */
-.ud-statsline-root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;flex:0 999 auto;min-width:0;padding:0 8px;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;margin:0;display:block;overflow:hidden}
-.ud-statsline-sep{color:var(--dsw-alias-separator-primary);margin:0 10px}
+.ud-statsline-root{text-align:center;max-width:var(--dsh-chat-content-width);box-sizing:border-box;flex:0 999 auto;min-width:0;padding:0;font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;text-overflow:ellipsis;margin:0;margin-left:calc(0px - var(--ud-dock-gap,0px));text-indent:var(--ud-dock-gap,0px);display:block;overflow:hidden}
 /* 芯片 portal 至动作行末尾,历史轮悬停/焦点显隐随父级 data-actions-reveal,无需自绘规则 */
 .ud-turn-cost{font-size:var(--dsh-content-font-size-secondary,13px);color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap;margin-left:${TURN_COST_GAP_PX}px}
 `
@@ -2556,15 +2593,18 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
           h('span', { className: 'ud-switch__thumb' })))
     }
 
-    // 底部信息栏 append 条目:与官方 activity/usage pill 同处 dock 槽,order 排官方之后,
-    // 只渲染官方没有的增强项(精确命中率/Token 明细/费用),官方数据由官方组件原样渲染
-    // 语言切换经槽的 locale 座以新 t 引用驱动 memo 重渲染
+    function useUsageDialogTarget(anchorRef, percent) {
+      const [target, setTarget] = useState(null)
+      useEffect(() => observeUsageDialog(anchorRef.current, document, MutationObserver, setTarget, percent), [percent])
+      return target
+    }
+
+    // 官方明细末尾仅追加补充项，底栏保留费用。
     const StatsLineAppended = React.memo(function StatsLineAppended({ useProjection, t = defaultT }) {
       if (typeof useProjection !== 'function') return null
       const usage = useProjection('tokenUsage')
       const [prefs, setPrefs] = useState(() => statsLineState.get())
       useEffect(() => statsLineState.subscribe(() => setPrefs(statsLineState.get())), [])
-      // 价格异步首帧可能未回:回包经状态刷新补渲染,未回期间费用组不渲染
       const [pricingRules, setPricingRules] = useState(null)
       useEffect(() => {
         let alive = true
@@ -2573,31 +2613,28 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
         })
         return () => { alive = false }
       }, [])
-      const groups = buildStatsGroups(usage, prefs, t, pricingRules)
-      const costItem = buildCostItem(usage, pricingRules, prefs, t)
-      const entries = groups.map((text) => ({ text }))
-      if (costItem !== null && groups[groups.length - 1] === costItem) {
-        entries[entries.length - 1] = { text: costItem, title: t('statsCostTitle') }
-      }
-      const rootRef = useRef(null)
-      const [truncated, setTruncated] = useState(false)
+      const anchorRef = useRef(null)
+      const costRef = useRef(null)
       useLayoutEffect(() => {
-        const element = rootRef.current
-        if (!element) return undefined
-        const measure = () => setTruncated(element.scrollWidth > element.clientWidth)
-        measure()
-        const observer = new ResizeObserver(measure)
-        observer.observe(element)
-        return () => observer.disconnect()
-      }, [groups])
-      if (entries.length === 0) return null
-      return h('div', {
-        className: 'ud-statsline-root',
-        ref: rootRef,
-        title: truncated ? entries.map((entry) => entry.text).join(STATS_LINE_TITLE_SEPARATOR) : undefined,
-      }, entries.map((entry, index) => h(React.Fragment, { key: index },
-        index > 0 && h('span', { className: 'ud-statsline-sep', 'aria-hidden': true }, '|'),
-        entry.title ? h('span', { title: entry.title }, entry.text) : entry.text)))
+        const element = costRef.current
+        const dock = anchorRef.current?.closest('[data-slot="conversation.composer.dock"]')?.parentElement
+        if (element && dock) element.style.setProperty('--ud-dock-gap', getComputedStyle(dock).columnGap)
+      })
+      const percent = prefs.cachePrecision && usage ? cacheHitPercentPrecise(usage) : null
+      const target = useUsageDialogTarget(anchorRef, percent)
+      const rows = buildUsageDialogRows(usage, prefs, t)
+      const costItem = usage && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)
+        ? buildCostItem(usage, pricingRules, prefs, t)
+        : null
+      const details = target && createPortal && rows.length > 0
+        ? createPortal(rows.map((row) => h(React.Fragment, { key: row.key },
+          h('dt', { 'data-ud-usage-detail': row.key }, row.label),
+          h('dd', { 'data-ud-usage-detail': row.key }, row.value))), target)
+        : null
+      return h(React.Fragment, null,
+        h('span', { ref: anchorRef, hidden: true }),
+        costItem !== null && h('div', { ref: costRef, className: 'ud-statsline-root', title: t('statsCostTitle') }, costItem),
+        details)
     })
 
     // 注入点B 组件:回合费用芯片,官方动作行内渲染(复制与分支图标之间,赞踩/上下文跳转同排);

@@ -28,11 +28,11 @@ window.__ModuleLoader__.load({
     else if (Array.isArray(window.__navicIconQueue)) window.__navicIconQueue.push(NAV_ICON)
     else window.__navicIconQueue = [NAV_ICON]
 
-    // 通知出口:公共依赖 @mzzsfy/dsh-common-tools 可选消费(占位条目全仓唯一,由
+    // 通知出口:公共依赖 @mzzsfy/dsh-change-bus 可选消费(占位条目全仓唯一,由
     // dsh-session-manager 代挂;模块表缺失或导出缺 show 即通知通道置空)
     let toast = () => {}
     try {
-      toast = require('@mzzsfy/dsh-common-tools/client').toast.show || (() => {})
+      toast = require('@mzzsfy/dsh-change-bus/client').toast.show || (() => {})
     } catch {
       toast = () => {}
     }
@@ -1740,8 +1740,9 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
   let observer = null
   // header 兜底入口许可:官方浏览弹窗环境保持 3 按钮布局,克隆入口只在弹窗
   // footer;弹窗打不开的环境(基座按钮点击无反应)首次点击即探测——委托捕获
-  // 监听,弹窗未出现则当场注入第 4 按钮并直接打开克隆弹窗。环境归因(auth 或
-  // 其它)不可静态判定,用户首次真实点击是最可靠的行为信号
+  // 监听,弹窗未出现则静默注入第 4 按钮常驻兜底。不替用户打开克隆弹窗:用户
+  // 点「添加工作区」的意图是创建工作区,环境坏不该改变按钮语义;环境归因
+  // (auth 或其它)不可静态判定,用户首次真实点击是最可靠的行为信号
   let headerAllowed = false
   let probeArmed = false
   const armClickProbe = () => {
@@ -1756,7 +1757,7 @@ function setupCloneInjection(doc, { enabledRef, onOpen }) {
         if (disposed || headerAllowed) return
         if (findBrowseDialog(doc)) return
         headerAllowed = true
-        onOpen()
+        rescan()
       }, 600)
     }, true)
   }

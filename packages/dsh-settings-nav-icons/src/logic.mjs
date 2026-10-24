@@ -237,17 +237,20 @@ export function resolveForLabel(label) {
 }
 
 // 市场卡片头像槽决策:img(作者头像)与 div(字母色块)同构处理——原子节点隐藏,
-// 插件图标注入跟随。记账值 = 插件名,换名重贴由该比较驱动。
+// 插件图标注入跟随。记账值 = 插件名,换名重贴由该比较驱动。命中须同时校验
+// 行内隐藏仍在:React 重渲染可能清 style 保记账,放行让 replacePass 重贴自愈。
 export function decideAvatar(av, name) {
-  if (name === '' || av.dataset.navic === name) return null
+  if (name === '' || (av.dataset.navic === name && av.style.display === 'none')) return null
   return { name, html: themedIcon(name), av }
 }
 
 export function applyAvatar(av, decision) {
   // 原子节点不移除(React 持引用,移除/清空子树后 reconcile 报错):隐藏并记账,
   // 注入图标跟随其后;重贴先清行内上次注入的图标(父容器范围扫描,防槽体被
-  // 外部替换后旧注入成孤儿双图)
+  // 外部替换后旧注入成孤儿双图)。隐藏必须走行内 style:hidden 属性是 UA 样式,
+  // 会被市场卡自己的 .av{display:grid} 类规则压过(dsh-market v1.69 实测双图标)
   av.hidden = true
+  av.style.display = 'none'
   av.dataset.navic = decision.name
   const parent = av.parentElement
   if (parent !== null) {

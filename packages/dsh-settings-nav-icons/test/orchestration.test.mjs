@@ -90,6 +90,7 @@ function makeAvatar({ name = 'plugin', rowFound = true, navic = '' } = {}) {
     tagName: 'IMG',
     dataset: { navic },
     hidden: false,
+    style: { display: '' },
     injectedCount: 0,
     rowFound,
     name,
@@ -219,13 +220,13 @@ function boot(mod, doc) {
   return () => disposers.forEach((dispose) => dispose())
 }
 
-test('boot 观察:body 目标与三开关齐全,卸载后断开', () => {
+test('boot 观察:body 目标与四开关齐全,卸载后断开', () => {
   const { win, doc, observed } = loadClient()
   const unload = boot(win.__loaded, doc)
   try {
     assert.equal(observed.length, 1, '恰一次 observe')
     assert.equal(observed[0][0], doc.body, '观察目标是 body')
-    assert.deepEqual(observed[0][1], { childList: true, subtree: true, characterData: true }, '三开关齐全')
+    assert.deepEqual(observed[0][1], { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] }, '四开关齐全(style 属性域精确)')
   } finally {
     unload()
   }
@@ -566,6 +567,8 @@ test('onMutations 过滤:元素级变更唤醒,文本节点与域外文本不唤
     const inCellText = { parentElement: { closest(sel) { return sel.includes('navCell') ? {} : null } } }
     const outText = { parentElement: { closest() { return null } } }
     const rowText = { parentElement: { closest(sel) { return sel.includes('_row1') ? {} : null } } }
+    const avStyle = { matches(sel) { return sel === '[class$="_av"]' } }
+    const outStyle = { matches() { return false } }
     observer.cb([{ type: 'childList', addedNodes: [{ nodeType: 3 }], removedNodes: [] }])
     assert.equal(raf.size(), 0, '纯文本节点级 childList 不唤醒')
     observer.cb([{ type: 'childList', addedNodes: [{ nodeType: 1 }], removedNodes: [] }])
@@ -578,6 +581,13 @@ test('onMutations 过滤:元素级变更唤醒,文本节点与域外文本不唤
     raf.flush()
     observer.cb([{ type: 'characterData', target: rowText }])
     assert.equal(raf.size(), 1, '市场卡片名域内文本变更唤醒')
+    raf.flush()
+    observer.cb([{ type: 'attributes', attributeName: 'class', target: avStyle }])
+    assert.equal(raf.size(), 0, '非 style 属性变更不唤醒')
+    observer.cb([{ type: 'attributes', attributeName: 'style', target: outStyle }])
+    assert.equal(raf.size(), 0, '域外元素 style 变更不唤醒')
+    observer.cb([{ type: 'attributes', attributeName: 'style', target: avStyle }])
+    assert.equal(raf.size(), 1, '头像槽 style 变更(行内隐藏被清)唤醒自愈')
     raf.flush()
   } finally {
     unload()

@@ -286,17 +286,20 @@ window.__ModuleLoader__.load({
     }
 
     // 市场卡片头像槽决策:img(作者头像)与 div(字母色块)同构处理——原子节点隐藏,
-    // 插件图标注入跟随。记账值 = 插件名,换名重贴由该比较驱动。
+    // 插件图标注入跟随。记账值 = 插件名,换名重贴由该比较驱动。命中须同时校验
+    // 行内隐藏仍在:React 重渲染可能清 style 保记账,放行让 replacePass 重贴自愈。
     function decideAvatar(av, name) {
-      if (name === '' || av.dataset.navic === name) return null
+      if (name === '' || (av.dataset.navic === name && av.style.display === 'none')) return null
       return { name, html: themedIcon(name), av }
     }
 
     function applyAvatar(av, decision) {
       // 原子节点不移除(React 持引用,移除/清空子树后 reconcile 报错):隐藏并记账,
       // 注入图标跟随其后;重贴先清行内上次注入的图标(父容器范围扫描,防槽体被
-      // 外部替换后旧注入成孤儿双图)
+      // 外部替换后旧注入成孤儿双图)。隐藏必须走行内 style:hidden 属性是 UA 样式,
+      // 会被市场卡自己的 .av{display:grid} 类规则压过(dsh-market v1.69 实测双图标)
       av.hidden = true
+      av.style.display = 'none'
       av.dataset.navic = decision.name
       const parent = av.parentElement
       if (parent !== null) {
@@ -440,13 +443,18 @@ window.__ModuleLoader__.load({
 
     // 事件过滤:childList 通道仅元素级变更放行(流式文本节点级变更不相关);
     // characterData 通道按目标域精确放行(语言切换的 label 原地改写、卡片改名),
-    // 域外文本变更(流式输出正文)不唤醒
+    // 域外文本变更(流式输出正文)不唤醒;attributes 通道仅 style 且命中头像槽
+    // 才放行(行内隐藏被外部清除后的自愈重贴入口,域外属性写不唤醒)
     function onMutations(mutations) {
       for (const record of mutations) {
         if (record.type === 'characterData') {
           const parent = record.target.parentElement
           if (parent === null) continue
           if (parent.closest(SELECTOR_CELL) === null && parent.closest(SELECTOR_ROW1) === null) continue
+        } else if (record.type === 'attributes') {
+          const target = record.target
+          if (record.attributeName !== 'style') continue
+          if (target == null || typeof target.matches !== 'function' || !target.matches(SELECTOR_AV)) continue
         } else {
           let relevant = false
           for (const node of record.addedNodes) {
@@ -608,7 +616,7 @@ window.__ModuleLoader__.load({
       restoreDeclarations()
       drainQueue()
       observer = new MutationObserver(onMutations)
-      observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] })
       slot.observer = observer
       refreshMarkedContent()
       replacePass()

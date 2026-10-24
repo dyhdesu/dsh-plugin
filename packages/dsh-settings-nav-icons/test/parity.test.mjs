@@ -334,6 +334,7 @@ function defineScenarios(prefix, L) {
       tagName: 'IMG',
       dataset: {},
       hidden: false,
+      style: { display: '' },
       parentInjections: [],
       parentElement: {
         querySelectorAll(sel) {
@@ -347,6 +348,7 @@ function defineScenarios(prefix, L) {
     assert.ok(d1, '首次应产出决策')
     applyAvatar(img, d1)
     assert.equal(img.hidden, true, '原子节点隐藏保留(React 持引用)')
+    assert.equal(img.style.display, 'none', '行内 display:none 压过市场卡自有类规则(hidden 属性是 UA 样式可被 .av{display:grid} 覆盖)')
     assert.equal(img.dataset.navic, '某插件')
     assert.ok(img.inserted.startsWith('afterend:'), '注入跟随其后')
     // 换名:行内带标记的旧注入清理,无标记外来兄弟不动
@@ -357,7 +359,14 @@ function defineScenarios(prefix, L) {
     applyAvatar(img, d2)
     assert.deepEqual(removed, ['stale'], '旧注入清理,外来兄弟保留')
     assert.equal(img.dataset.navic, '改名插件')
-    assert.equal(decideAvatar(img, '改名插件'), null, '同名幂等')
+    assert.equal(decideAvatar(img, '改名插件'), null, '同名且行内隐藏在场,幂等')
+    // React 重渲染清 style 保记账:放行重贴,replacePass 全量重置实现自愈
+    img.style.display = ''
+    const d3 = decideAvatar(img, '改名插件')
+    assert.ok(d3, '行内隐藏丢失时重出决策')
+    applyAvatar(img, d3)
+    assert.equal(img.style.display, 'none', '重贴恢复行内隐藏')
+    assert.equal(decideAvatar(img, '改名插件'), null, '重贴后回归幂等')
     assert.equal(decideAvatar(img, ''), null, '空名不决策')
   })
 
@@ -368,6 +377,7 @@ function defineScenarios(prefix, L) {
       dataset: {},
       textContent: 'X',
       hidden: false,
+      style: { display: '' },
       parentElement: { querySelectorAll(sel) { return sel === '[data-navic="1"]' ? [] : [] } },
       inserted: null,
       insertAdjacentHTML(pos, html) { div.inserted = pos + ':' + html },
@@ -375,6 +385,7 @@ function defineScenarios(prefix, L) {
     const d = decideAvatar(div, '另一插件')
     applyAvatar(div, d)
     assert.equal(div.hidden, true, '色块节点隐藏(React 受管子树不触碰)')
+    assert.equal(div.style.display, 'none', '行内隐藏与 img 同构')
     assert.equal(div.textContent, 'X', '子树不清空(与 IMG 同构)')
     assert.ok(div.inserted.startsWith('afterend:'), '图标跟随其后')
     assert.equal(div.dataset.navic, '另一插件')

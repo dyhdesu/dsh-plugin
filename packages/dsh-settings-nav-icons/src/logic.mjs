@@ -181,7 +181,7 @@ export function poolIndexOf(label) {
 }
 
 // 名称关键词 → 主题图标;整词边界匹配,短词(im/db/ai)不误伤子串。
-// 顺序即优先级,具体语义在前。覆盖 dsh-market 目录内全部插件:
+// 顺序即优先级,具体语义在前。涵盖 dsh-market 目录内全部插件:
 // 命中者得语义图,未命中者走哈希备用池。
 export const NAME_RULES = [
   ['git', GIT],
@@ -207,15 +207,10 @@ export const NAME_RULES = [
   ['zap|flash|fast|quick|boost|speed|turbo', ZAP],
 ].map(function (pair) { return { re: new RegExp('(^|[^a-z])(' + pair[0] + ')([^a-z]|$)'), icon: pair[1] } })
 
-// 插件名/分区 label 两级取图:用户覆盖 → 外部声明 → 关键词主题图 → 稳定哈希备用池。
+// 插件名/分区 label 两级取图:外部声明 → 关键词主题图 → 稳定哈希备用池。
 // 表值为原始声明(glyph 名或 svg),命中后过 resolveIcon 归一化展开;归一化失败
 // (声明值被撤销/存储被篡改)视为该层未命中,继续下一层。
 export function themedIcon(name) {
-  const overridden = lookupWithAlias(USER_OVERRIDES, name)
-  if (overridden !== undefined) {
-    const resolved = resolveIcon(overridden)
-    if (resolved !== undefined) return resolved
-  }
   const declared = lookupWithAlias(DECLARED_ICONS, name)
   if (declared !== undefined) {
     const resolved = resolveIcon(declared)
@@ -228,14 +223,9 @@ export function themedIcon(name) {
   return FALLBACK[poolIndexOf(name)]
 }
 
-// 分区取图全链:用户覆盖 → 声明(含别名) → 内置映射 → 关键词/哈希兜底。decide
-// 与声明/覆盖变更就地重写共用;撤销时回退必须含内置映射,否则卡死在哈希图。
+// 分区取图全链:声明(含别名) → 内置映射 → 关键词/哈希兜底。decide 与声明
+// 变更就地重写共用;撤销时回退必须含内置映射,否则卡死在哈希图。
 export function resolveForLabel(label) {
-  const overridden = lookupWithAlias(USER_OVERRIDES, label)
-  if (overridden !== undefined) {
-    const resolved = resolveIcon(overridden)
-    if (resolved !== undefined) return resolved
-  }
   const declared = lookupWithAlias(DECLARED_ICONS, label)
   if (declared !== undefined) {
     const resolved = resolveIcon(declared)
@@ -244,15 +234,6 @@ export function resolveForLabel(label) {
   const mapped = ICONS[label]
   if (mapped !== undefined) return mapped
   return themedIcon(label)
-}
-
-// 当前 label 的取图来源:用户覆盖 / 插件声明 / 内置映射 / 关键词与哈希推导。
-// 与 resolveForLabel 同序遍历,供覆盖浮层展示当前生效层。
-export function iconSourceOf(label) {
-  if (lookupWithAlias(USER_OVERRIDES, label) !== undefined) return 'user'
-  if (lookupWithAlias(DECLARED_ICONS, label) !== undefined) return 'declared'
-  if (ICONS[label] !== undefined) return 'builtin'
-  return 'derived'
 }
 
 // 市场卡片头像槽决策:img(作者头像)与 div(字母色块)同构处理——原子节点隐藏,
@@ -294,11 +275,7 @@ export const ICONS = {
 // 继承成员;污染面收敛在 window.__navicIcons 单一命名空间。
 export const DECLARED_ICONS = Object.create(null)
 
-// 用户逐分区覆盖注册表:取图链最前端,值经 resolveIcon 归一化,持久化由
-// 编排层落 localStorage(纯逻辑层不触碰存储)。
-export const USER_OVERRIDES = Object.create(null)
-
-// 官方双语分区等价组:组内任一语言 label 作声明/覆盖键,组内其他语言取图时
+// 官方双语分区等价组:组内任一语言 label 作声明键,组内其他语言取图时
 // 同样命中(消除语言切换下声明键漂移)。仅收官方现有展示形态,不发明未知 id。
 export const ALIAS_GROUPS = [
   ['通用设置', 'General'],
@@ -321,7 +298,7 @@ export function lookupWithAlias(table, label) {
 }
 
 // 键的等价组展开:自身 + 所属组内其他成员;不入组的键只返回自身。
-// 覆盖写入/清除与就地重写按该范围触达,保证双语分区两侧状态一致。
+// 声明变更就地重写按该范围触达,保证双语分区两侧状态一致。
 export function aliasKeysOf(label) {
   const keys = [label]
   for (const group of ALIAS_GROUPS) {

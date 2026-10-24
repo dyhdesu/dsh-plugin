@@ -2,7 +2,7 @@
 // 单元格与头像槽编排、逐项异常隔离。加载 client.js 全文,window/document 以桩注入。
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
@@ -614,20 +614,24 @@ test('语言切换端到端:characterData 域内变更经回调触发重贴', ()
 })
 
 // 声明侧契约:全部生产者包的注册样板(先探测入口、数组态入队),改契约须同步全部生产者。
-// 包脱离 monorepo 布局(发布态)时跳过:无兄弟包源码可读。
+// 清单自动发现:扫描 packages/*/src/client.js 含 __navicIconQueue 样板者全测,
+// 手工清单必然漂移(曾落后实际 5 包);发布态(无兄弟包)按单包自画像校验。
 test('生产者样板契约:全包注册走 __navicIcons/__navicIconQueue', () => {
-  const producers = ['dsh-session-manager', 'dsh-usage-panel', 'dsh-turn-notify', 'dsh-maintain', 'dsh-rs-workflow',
-    'dsh-usage-dash', 'dsh-cron-board', 'dsh-think-expand', 'dsh-settings-nav-icons',
-    'dsh-auto-trust-all', 'dsh-llm-pi-gateway']
+  const packagesRoot = join(PKG_ROOT, '..')
+  const producers = existsSync(packagesRoot)
+    ? readdirSync(packagesRoot)
+      .filter((pkg) => {
+        const clientPath = join(packagesRoot, pkg, 'src', 'client.js')
+        return existsSync(clientPath) && readFileSync(clientPath, 'utf8').includes('__navicIconQueue')
+      })
+    : []
   let checked = 0
   for (const pkg of producers) {
-    const clientPath = join(PKG_ROOT, '..', pkg, 'src', 'client.js')
-    if (!existsSync(clientPath)) continue
-    const src = readFileSync(clientPath, 'utf8')
+    const src = readFileSync(join(packagesRoot, pkg, 'src', 'client.js'), 'utf8')
     assert.ok(/__navicIcons\s*!==\s*undefined[^]*?__navicIcons\.register\(/.test(src), pkg + ' 缺少入口探测与注册')
     assert.ok(/Array\.isArray\(window\.__navicIconQueue\)/.test(src), pkg + ' 缺少数组态入队分支')
     assert.ok(/__navicIconQueue\s*=\s*\[/.test(src), pkg + ' 缺少队列初始化分支')
     checked += 1
   }
-  assert.ok(checked > 0, 'monorepo 布局下至少校验一个生产者')
+  assert.ok(checked >= 1, 'monorepo 布局下至少应发现声明生产者(含本包自画像),实际发现 ' + checked + ' 个')
 })

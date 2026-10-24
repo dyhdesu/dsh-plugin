@@ -180,7 +180,6 @@ function scheduleTzOffset(schedule) {
 }
 
 const API_PREFIX = '/api/cron-board/'
-const REFRESH_INTERVAL_MS = 30 * SECOND_MS
 const TABS = [
   { value: 'jobs', label: '看板' },
   { value: 'envs', label: '环境变量' },
@@ -378,9 +377,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
   function factory(require) {
     let React = null
     let ReactDOMClient = null
+    let tools = null
     try {
       React = require('react')
       ReactDOMClient = require('react-dom/client')
+      // 公共工具库:bus 订阅是数据刷新唯一通道,缺失即整面板禁用(无轮询回退)
+      tools = require('@mzzsfy/dsh-common-tools/client')
     } catch {
       return noopFactory()
     }
@@ -403,6 +405,25 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
       try { json = await response.json() } catch { json = null }
       if (!response.ok) return { ok: false, error: json && json.error ? json.error : '请求失败(' + response.status + ')' }
       return { ok: true, data: json }
+    }
+
+    const statusReaders = new WeakMap()
+    function createStatusReader(bus) {
+      let pending = null, resolvePending
+      const snapshot = tools.createSnapshotRefresh(async () => {
+        const outcome = await request('GET', 'status')
+        const resolve = resolvePending
+        pending = resolvePending = null
+        resolve?.(outcome)
+      })
+      const read = () => pending ??= new Promise(resolve => { resolvePending = resolve; snapshot.refresh() })
+      statusReaders.set(bus, read)
+      return () => {
+        snapshot.dispose()
+        statusReaders.delete(bus)
+        resolvePending?.({ ok: false, error: '插件已卸载' })
+        pending = resolvePending = null
+      }
     }
 
     function ensureStyle(document) {
@@ -1012,7 +1033,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
             h('button', { className: 'cb-button', onClick: () => setLogText(null) }, '关闭'))) : null)
     }
 
-    function CronBoardPanel({ visible, wsModel } = {}) {
+    function CronBoardPanel({ bus, visible, wsModel }) {
       const active = visible !== false
       const [tab, setTab] = useState('jobs')
       const [jobs, setJobs] = useState([])
@@ -1020,7 +1041,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
       const [status, setStatus] = useState(null)
       const [now, setNow] = useState(Date.now())
       const [reloadFlag, setReloadFlag] = useState(0)
-      const reload = useCallback(() => setReloadFlag((value) => value + 1), [])
+      const refreshRef = useRef(() => {})
+      const reload = useCallback(() => { refreshRef.current(); setReloadFlag((value) => value + 1) }, [])
       // 乐观更新:受控开关点击即时到位,PATCH 失败由调用方回滚;reload 拉权威态对账
       const applyJobPatch = useCallback((id, patch) => {
         setJobs((prev) => prev.map((job) => (job.id === id ? { ...job, ...patch } : job)))
@@ -1036,7 +1058,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
           const [jobsOutcome, envsOutcome, statusOutcome] = await Promise.all([
             request('GET', 'jobs'),
             request('GET', 'envs'),
-            request('GET', 'status'),
+            statusReaders.get(bus)(),
           ])
           if (!alive) return
           if (jobsOutcome.ok) setJobs(jobsOutcome.data.items)
@@ -1044,10 +1066,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
           if (statusOutcome.ok) setStatus(statusOutcome.data)
           setNow(Date.now())
         }
-        load()
-        const timer = setInterval(load, REFRESH_INTERVAL_MS)
-        return () => { alive = false; clearInterval(timer) }
-      }, [reloadFlag, active])
+        // 数据刷新唯一通道:订阅推送总线(首连 onReset 即首拉,消息到达刷新);
+        // 相对时间走针是纯本地时钟,本地 timer 驱动,不发请求
+        const snapshot = tools.createSnapshotRefresh(load)
+        refreshRef.current = snapshot.refresh
+        const unsubscribe = bus.subscribe(snapshot.refresh, { onReset: snapshot.refresh })
+        const clock = setInterval(() => setNow(Date.now()), SECOND_MS)
+        return () => { alive = false; refreshRef.current = () => {}; snapshot.dispose(); unsubscribe(); clearInterval(clock) }
+      }, [bus, active])
 
       return h('div', { className: 'cb-panel' },
         h('div', { className: 'cb-toolbar' },
@@ -1123,7 +1149,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
 
     // better-sidebar tab:注册即单实例(single);只注册不主动打开,
     // 打开由用户从侧边栏目录手动进入(注册即 openTab 会在每次页面加载时抢占当前视图)
-    function registerBoardTab(ctx, service, wsModel) {
+    function registerBoardTab(ctx, service, wsModel, bus) {
       return ctx.effect(() => {
         const disposeTab = service.registerTab({
           id: TAB_ID,
@@ -1134,7 +1160,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
             h('path', { d: 'M6 2v12M10 2v12' })),
           order: 46,
           single: true,
-          component: (props) => h(CronBoardPanel, { visible: props.visible, wsModel }),
+          component: (props) => h(CronBoardPanel, { visible: props.visible, wsModel, bus }),
         })
         return disposeTab
       }, 'cron-board sidebar tab')
@@ -1150,13 +1176,13 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
 
     // 全局面板形态:main keyed 条目(中央面板)+ sidebar.panellist 条目(侧栏入口行),同 id 配对;
     // 页签点击切换、激活高亮均由宿主管;effect 工厂必须交付组合清理,否则互斥仲裁拆不掉条目
-    function registerMainPanel(ctx, wsModel) {
+    function registerMainPanel(ctx, wsModel, bus) {
       return ctx.effect(() => {
         const injectDisposers = []
         injectDisposers.push(ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main',
           key: PANEL_ID,
-        }, () => h('div', { className: 'cb-main' }, h(CronBoardPanel, { wsModel })))))
+        }, () => h('div', { className: 'cb-main' }, h(CronBoardPanel, { wsModel, bus })))))
         injectDisposers.push(ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
           name: 'sidebar.panellist',
           id: PANEL_ID,
@@ -1170,6 +1196,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
       // workspaces 由宿主 client 常驻提供;slots 供设置页分区挂载(缺失则 fiber 未激活,即干净禁用)
       inject: ['workspaces', 'slots'],
       apply(ctx) {
+        const bus = tools.setupCommonTools(ctx)
+        ctx.effect(() => createStatusReader(bus), 'cron-board 共享状态快照')
         ensureStyle(document)
         // 工作区 model(list 即 getSnapshot/subscribe 契约的响应式模型;形态不符传 null,表单仅保留手输)
         const wsService = ctx.get('workspaces')
@@ -1179,7 +1207,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
         let sidebarTabOn = false
         let tabDisposer = null
         let panelDisposer = null
-        const attachBoardTab = (sidebar) => registerBoardTab(ctx, sidebar, wsModel)
+        const attachBoardTab = (sidebar) => registerBoardTab(ctx, sidebar, wsModel, bus)
         const applyPref = () => {
           const wantTab = sidebarTabOn && currentSidebar !== undefined
           if (wantTab && tabDisposer === null) {
@@ -1189,11 +1217,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
             tabDisposer()
             tabDisposer = null
           }
-          if (!wantTab && panelDisposer === null) panelDisposer = registerMainPanel(ctx, wsModel)
+          if (!wantTab && panelDisposer === null) panelDisposer = registerMainPanel(ctx, wsModel, bus)
         }
-        const prefWatch = setInterval(async () => {
+        // 偏好仲裁数据源:订阅总线刷新(updateUiSettings 变更即 publish),不再周期轮询
+        let prefAlive = true
+        const syncPref = async () => {
           try {
-            const outcome = await request('GET', 'status')
+            const outcome = await statusReaders.get(bus)()
+            if (!prefAlive) return
             const next = readSidebarTabPref(outcome)
             if (next !== sidebarTabOn) {
               const previous = sidebarTabOn
@@ -1201,15 +1232,19 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
               try {
                 applyPref()
               } catch (error) {
-                // 形态切换失败回滚偏好,下轮轮询重试,避免入口消失后卡死
+                // 形态切换失败回滚偏好,下轮事件重试,避免入口消失后卡死
                 sidebarTabOn = previous
                 console.warn('[cron-board] 看板形态切换失败:', error)
               }
             }
-          } catch { /* 轮询失败保形态不变,下轮重试 */ }
-        }, 5 * 1000)
+          } catch { /* 刷新失败保形态不变,下轮事件重试 */ }
+        }
+        const prefRefresh = tools.createSnapshotRefresh(syncPref)
+        const unsubscribePref = bus.subscribe(prefRefresh.refresh, { onReset: prefRefresh.refresh })
         ctx.effect(() => () => {
-          clearInterval(prefWatch)
+          prefAlive = false
+          prefRefresh.dispose()
+          unsubscribePref()
           if (tabDisposer) tabDisposer()
           if (panelDisposer) panelDisposer()
         }, 'cron-board mount arbitration')

@@ -1,6 +1,7 @@
 // 装配测试:数据目录解析 + webServer prefix 注册 + settings/timer 接线 + 装配后请求可用。
 
 import { test } from 'node:test'
+import { busStub, resetBusStub } from './_mocks.common-tools.mjs'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -65,6 +66,8 @@ test('index:apply 注册 prefix 路由且请求走通(列表接口)', async () =
 function makeFullCtx({ timerAvailable = true } = {}) {
   const routes = new Map()
   const registered = []
+  resetBusStub()
+  const published = busStub.published
   let value = {}
   const settingsService = {
     register(ns, schema, options) {
@@ -136,13 +139,14 @@ function makeFullCtx({ timerAvailable = true } = {}) {
       },
     },
   }
-  return { ctx, routes, registered, intervals, settingsService, sessions }
+  return { ctx, routes, registered, intervals, settingsService, sessions, published }
 }
 
-test('index:inject 仅声明 webServer(sessionController 异步就绪等待,不进 inject)', async () => {
+test('index:inject 声明 webServer(总线经 common-tools host 激活)(sessionController 异步就绪等待,不进 inject)', async () => {
   // Given sessionController 由 dsh-web-app 条目异步挂载:inject 声明在 0.1.1-rc.2 上
   // 永久 pending 拖死 boot,apply 内同步探测又抢在挂载前误判(0.1.2-rc.1 实测 404)
-  // Then 静态锁定 inject 声明;就绪语义由 effect 内轮询等待 + 超时禁用承担
+  // Then 静态锁定 inject 声明;就绪语义由 effect 内轮询等待 + 超时禁用承担;
+  // 推送总线经 common-tools host 激活(webServer shape 到位即装配)
   assert.deepEqual(mod.inject, ['webServer'])
 })
 
@@ -226,6 +230,36 @@ test('index:tickSeconds 设置变更经 watch 重建 interval', async () => {
   watchFn()
   // Then interval 重建
   assert.equal(intervals.length, 2)
+})
+
+test('index:写路由成功受理即发布总线变更,失败不发布', async () => {
+  // Given 全服务桩(changeBus 记录型)
+  const { ctx, routes, published } = makeFullCtx()
+  apply(ctx)
+  const handler = routes.get('/api/cron-board')
+  const call = (method, path, body) => {
+    const res = { status: null, payload: null }
+    res.writeHead = (status) => { res.status = status }
+    res.end = (text) => { res.payload = text === undefined ? null : JSON.parse(text) }
+    const req = new EventEmitter()
+    req.method = method
+    req.url = 'http://localhost' + path
+    req.headers = body === undefined ? undefined : { 'content-type': 'application/json' }
+    setTimeout(() => {
+      if (body !== undefined) req.emit('data', Buffer.from(JSON.stringify(body)))
+      req.emit('end')
+    }, 0)
+    return handler(req, res).then(() => res)
+  }
+  // When GET(读)与非法 POST(失败)
+  await call('GET', '/api/cron-board/jobs')
+  await call('POST', '/api/cron-board/jobs', {})
+  // Then 读与失败均不发布
+  assert.deepEqual(published, [])
+  // When 合法写入
+  await call('POST', '/api/cron-board/envs', { name: 'K', value: 'v' })
+  // Then 无负载发布恰一次
+  assert.deepEqual(published, [null])
 })
 
 test('index:tick 到期任务被调度执行(端到端装配)', async (t) => {

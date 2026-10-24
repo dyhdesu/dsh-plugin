@@ -23,7 +23,7 @@
 
 - **默认:全局面板**。看板以同 id 注册 main keyed 条目(中央面板)+ sidebar.panellist 条目(侧栏「新会话」下方面板行);点击面板行由宿主 `layout.selectPanel` 切换中央区,会话保持不动;点击会话行或新会话即切回会话(官方路径)
 - **手动移入**:设置>插件 页「定时任务」卡片(官方 PluginCard 形制:折叠卡壳,cb-pc 镜像)提供「看板移入 better-sidebar 侧边栏」开关;开启即注册扩展槽 tab 并卸载全局面板
-- **不自动回退**:移入后页签关闭/类型禁用均不再自动返回;把开关关掉即回到全局面板形态(轮询感知,约一个 tick 周期内生效)
+- **不自动回退**:移入后页签关闭/类型禁用均不再自动返回;把开关关掉即回到全局面板形态(经公共 WS 总线 `@mzzsfy/dsh-cron-board` 插件通道感知,变更即时生效;host/client 在 `apply(ctx)` 调用 `setupCommonTools(ctx)`,通道身份取 `ctx.fiber.entry.options.name` 的完整 npm 包名,组件捕获所属 ctx 的 bus，卸载可提前退订；ctx 卸载释放连接持有与全部订阅)
 - **开关可用性**:已装载 better-sidebar 时可切换;未装载时开关呈禁用态仅展示(保持全局面板,无副作用)
 
 ## 配置

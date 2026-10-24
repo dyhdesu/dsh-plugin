@@ -1,6 +1,7 @@
 // api:REST 路由 /api/cron-board/*。宿主 webServer 仅支持 exact/prefix 注册,
 // 本插件注册一条 prefix,handler 内按 method + 路径段表驱动分发(:id 路径段捕获);
 // 错误语义对齐仓内惯例:业务错误中文透传,系统级错误收敛固定文案并落服务端日志。
+// 写方法成功受理即经 notifyChange 发布总线变更(通知面/数据面分离,客户端 refetch 快照)。
 
 import { assertValidSchedule, nextRunAtOf, nextRunsOf, summarizeCron } from './cron.mjs'
 import { DEFAULT_MAX_EXPANSION, DEFAULT_TIMEOUT_MS } from './config.mjs'
@@ -164,7 +165,7 @@ function normalizeJob(body) {
   return normalized
 }
 
-export function createApi({ store, logger, executor, scheduler, periodic, sessionState, readSidebarTab, updateUiSettings, getAgentPresets, logSystem }) {
+export function createApi({ store, logger, executor, scheduler, periodic, sessionState, readSidebarTab, updateUiSettings, getAgentPresets, logSystem, notifyChange }) {
 
   const routes = [
     {
@@ -461,6 +462,13 @@ export function createApi({ store, logger, executor, scheduler, periodic, sessio
     return null
   }
 
+  // 写方法统一包装:成功受理即发布变更。预览类 POST(如 envs/import 预览)多发
+  // 一次通知,客户端 refetch 幂等无害;集中包装保证未来新增写路由不漏发
+  const WRITE_METHODS = new Set(['POST', 'PATCH', 'DELETE', 'PUT'])
+  const dispatchRoute = (matched, callArgs) => WRITE_METHODS.has(matched.route.method) && notifyChange
+    ? matched.route.handler(callArgs).then((result) => { notifyChange(); return result })
+    : matched.route.handler(callArgs)
+
   return {
     async handle(req, res) {
       const url = new URL(req.url, 'http://localhost')
@@ -478,7 +486,7 @@ export function createApi({ store, logger, executor, scheduler, periodic, sessio
           sendJson(res, 404, { error: MESSAGES.notFound })
           return
         }
-        await matched.route.handler({ req, res, url, params: matched.params })
+        await dispatchRoute(matched, { req, res, url, params: matched.params })
       } catch (error) {
         respondError(res, error, logSystem)
       }

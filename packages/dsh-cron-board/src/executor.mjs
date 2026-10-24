@@ -11,7 +11,7 @@ const SESSION_UNAVAILABLE = {
   run: async () => ({ status: 'fail', message: '会话服务不可用' }),
 }
 
-export function createExecutor({ store, logger, runner, sessionRunner, maxExpansion = DEFAULT_MAX_EXPANSION, readMaxConcurrent, readLogKeep, readMaskEnvInPrompt, logSystem }) {
+export function createExecutor({ store, logger, runner, sessionRunner, maxExpansion = DEFAULT_MAX_EXPANSION, readMaxConcurrent, readLogKeep, readMaskEnvInPrompt, logSystem, onChange }) {
   const shellRunner = runner || createShellRunner({ workdirFallback: process.cwd() })
   // 队列与活跃计数:许可数 = min(全局上限, 任务级收紧值);全局上限经 readMaxConcurrent 动态读
   const queue = []
@@ -103,6 +103,8 @@ export function createExecutor({ store, logger, runner, sessionRunner, maxExpans
       activeTotal--
       activeByJob.set(job.id, activeOf(job.id) - 1)
       pump()
+      // 运行收尾即状态变更(队列/活跃计数与任务卡回填),发布总线
+      if (onChange) onChange()
       // 终态后按保留策略裁剪该任务旧日志(失败不打断执行链)
       if (readLogKeep) {
         await logger.prune(job.id, readLogKeep()).catch(() => {})

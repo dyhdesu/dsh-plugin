@@ -350,7 +350,7 @@ test('Given client.js 装配面, When apply, Then inject 含 uiWorkspace(实测�
   const modules = []
   const windowStub = { __ModuleLoader__: { load: (module) => modules.push(module) }, addEventListener: () => {} }
   const reactStub = { useState: (v) => [v, () => {}], useEffect: () => {}, useRef: (v) => ({ current: v }), createElement: () => null }
-  const requireStub = (name) => (name === '@mzzsfy/dsh-change-bus/client' ? { toast: { show: () => 0 } } : reactStub)
+  const requireStub = (name) => (name === '@mzzsfy/dsh-common-tools/client' ? { toast: { show: () => 0 } } : reactStub)
   const factory = new Function('window', 'require', 'document', CLIENT_SRC + '\n;return null')
   factory(windowStub, requireStub, { createElement: () => ({ style: {}, remove() {} }), head: { appendChild: () => {} }, body: { appendChild: () => {} } })
   const mod = modules[0].factory(requireStub)

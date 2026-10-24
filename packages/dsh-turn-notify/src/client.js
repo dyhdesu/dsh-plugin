@@ -1,7 +1,7 @@
-// dsh-turn-notify Client 半区:轮询投影 + localStorage 认领 + 三通道发声。
+// dsh-turn-notify Client 半区:推送唤醒快照、事务认领与通知呈现。
 // 以 DSH client-modules 自注册格式发布:__ModuleLoader__.load({id, factory}),
 // factory(require) 中 require('react') 由 DSH client runtime 模块表解析。
-// 认领锁/完成标记走 localStorage(非 secure context 也可用的唯一跨窗口原语)。
+// IndexedDB 事务协调跨窗口认领,localStorage 保存偏好与提醒标记。
 // 页内通知通道经公共依赖 @mzzsfy/dsh-toast 展示,本包不自带通知 UI。
 
 window.__ModuleLoader__.load({
@@ -10,21 +10,20 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const { useState, useEffect, useRef } = React
 
-    // 通知出口:公共依赖 @mzzsfy/dsh-toast,可选消费——共享依赖包的模块表注入
-    // 全仓收敛到唯一权威消费方(session-manager),本插件不再代挂占位条目;
-    // 权威方未安装时模块表缺失,干净禁用 toast 通道(其余通道不受影响)
+    // 公共依赖 @mzzsfy/dsh-common-tools:总线订阅硬消费(数据刷新唯一通道,
+    // dsh-common-tools 的 client 侧协议;模块表缺失即本 client factory 抛错,由装载层
+    // 判定失败,无轮询回退);toast 可选消费(权威消费方 session-manager 未代挂
+    // 占位时模块表缺失,干净禁用 toast 通道,其余通道不受影响)
+    const tools = require('@mzzsfy/dsh-common-tools/client')
     let toast = null
     try {
-      toast = require('@mzzsfy/dsh-toast/client').show
+      toast = tools.toast.show
     } catch {
       // 模块表无 toast → 页内通知通道置空,调用点统一走 toast 判空
     }
 
-    // 长轮询请求超时上限,须大于服务端挂起上限,保证客户端总在服务端放弃后才断开
+    // 快照拉取超时防悬挂,总线断线由共享 WS 退避重连
     const REQUEST_TIMEOUT_MS = 30 * 1000
-    // 失败重连退避:指数增长至上限,防网络中断期间打爆服务端
-    const RETRY_MIN_MS = 2 * 1000
-    const RETRY_MAX_MS = 30 * 1000
     // 页内通知展示期,经公共依赖 holdMs 传入
     const TOAST_MS = 6 * 1000
     const BLINK_MS = 1 * 1000
@@ -93,7 +92,7 @@ window.__ModuleLoader__.load({
       return value >= 0 && value <= 1 ? value : DEFAULT_VOLUME
     }
 
-    const KEY_WID = 'turn-notify:wid'
+    let notificationWindowId
     const KEY_LOCK = 'turn-notify:lock:'
     const KEY_DONE = 'turn-notify:done:'
     const KEY_DND = 'turn-notify:dnd'
@@ -113,6 +112,7 @@ window.__ModuleLoader__.load({
     const KEY_MAPPING_LOCAL = 'turn-notify:mapping-local'
     // 轮询单例令牌:HMR/插件重载重建模块闭包时防轮询线程累积
     const KEY_POLL_TOKEN = 'turn-notify:polling'
+    const KEY_POLL_DISPOSE = 'turn-notify:polling:dispose'
 
     const storageState = { broken: false }
 
@@ -196,12 +196,7 @@ window.__ModuleLoader__.load({
     const readPageMapping = () => readJsonObject(KEY_PAGE_MAPPING)
 
     function windowId() {
-      let wid = localGet(KEY_WID)
-      if (wid === null) {
-        wid = 'w-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1000000).toString(36)
-        localSet(KEY_WID, wid)
-      }
-      return wid
+      return notificationWindowId ??= 'w-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
     }
 
     // 认领读阶段决策:done 终态 / 他锁跳过 / 过期接管 / 自锁或无锁认领
@@ -328,6 +323,69 @@ window.__ModuleLoader__.load({
       return botIds
     }
     /* LOGIC-END */
+
+    // 同库 readwrite 事务串行，终态提交后才能呈现；不依赖 secure context。
+    const CLAIM_DB = 'dsh-turn-notify'
+    const CLAIM_STORE = 'claims'
+    const CLAIM_RETENTION_MS = ANNOUNCED_TTL_MS + REQUEST_TIMEOUT_MS
+    let claimDbPromise = null
+    function closeClaimDb() {
+      const pending = claimDbPromise
+      claimDbPromise = null
+      pending?.then(db => db.close(), () => {})
+    }
+    function openClaimDb() {
+      if (claimDbPromise) return claimDbPromise
+      const pending = new Promise((resolve, reject) => {
+        const request = window.indexedDB.open(CLAIM_DB, 1)
+        request.onupgradeneeded = () => { request.result.createObjectStore(CLAIM_STORE, { keyPath: 'id' }) }
+        request.onerror = () => reject(request.error)
+        request.onblocked = () => reject(new Error('通知认领库被阻塞'))
+        request.onsuccess = () => {
+          const db = request.result
+          if (claimDbPromise !== pending) { db.close(); reject(new Error('通知认领代已退出')); return }
+          db.onversionchange = () => { if (claimDbPromise === pending) closeClaimDb() }
+          resolve(db)
+        }
+      })
+      claimDbPromise = pending
+      pending.catch(() => { if (claimDbPromise === pending) claimDbPromise = null })
+      return pending
+    }
+    async function claimNotification(unit, signal) {
+      if (signal?.aborted) return false
+      const now = Date.now()
+      try {
+        const db = await openClaimDb()
+        if (signal?.aborted) return false
+        const claimed = await new Promise((resolve, reject) => {
+          const transaction = db.transaction(CLAIM_STORE, 'readwrite')
+          const store = transaction.objectStore(CLAIM_STORE)
+          let winner = false
+          const abort = () => { try { transaction.abort() } catch { /* 已提交事务不能回滚 */ } }
+          const cleanup = () => signal?.removeEventListener('abort', abort)
+          signal?.addEventListener('abort', abort, { once: true })
+          transaction.oncomplete = () => { cleanup(); resolve(winner) }
+          transaction.onabort = transaction.onerror = () => { cleanup(); reject(transaction.error) }
+          const request = store.getAll()
+          request.onsuccess = () => {
+            const now = Date.now()
+            const rows = request.result
+            for (const row of rows) if (row.expiresAt <= now) store.delete(row.id)
+            if (signal?.aborted) return
+            if (rows.some(row => row.id === unit.id && row.expiresAt > now)) return
+            store.add({ id: unit.id, expiresAt: now + CLAIM_RETENTION_MS })
+            winner = localGet(KEY_DONE + unit.id) === null
+          }
+        })
+        return !signal?.aborted && claimed
+      } catch {
+        if (signal?.aborted) return false
+        announceDegrade('storage', 'IndexedDB 不可用，跨窗口认领已降级')
+        const claimed = claimEvent(unit.id)
+        return claimed && (storageState.broken || announcedOnce(unit.id, now))
+      }
+    }
 
     // ---- 声音:Web Audio,autoplay 解锁依赖首次用户交互,解锁前静默 ----
 
@@ -534,26 +592,29 @@ window.__ModuleLoader__.load({
       }
     }
 
-    // ---- 投影轮询与认领 ----
+    // ---- 投影快照与认领 ----
 
     let soundMapping = {}
     let uploadedIds = []
-    let running = false
-    // 已见投影版本:空即未首拉;长轮询续传游标,响应后随 payload 推进
+    // 同代实例各持接收租约,仅活动所有者驱动共享通知工作。
+    const notificationOwners = new Set()
+    let activeNotificationOwner = null
+    let stopNotifications = null
+    let notificationController = null
+    let refreshNotifications = null
+    // 已见投影版本:仅作冷启动判定(首个快照前错过窗口期的存量不回放轰炸)
     let projectionCursor = null
 
     // 生效映射:开关开时本地覆盖全局,关时本地整体休眠(结果即全局)
     const effectiveMapping = () => mergeMapping(soundMapping, localMappingEnabled() ? readLocalMapping() : {})
 
     async function pollOnce(signal) {
-      let payload
+      let payload, requestSignal
       try {
-        // cursor 为空即首拉,服务端立即返回全量;之后携带版本挂起等待增量。
-        // 组合代际中止与请求超时:服务端挂起上限低于此超时,超时即故障进入退避
-        const query = projectionCursor === null ? '' : '?cursor=' + projectionCursor
+        // 恒全量快照(变更通知走总线);组合代际中止与请求超时防悬挂
         const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-        const requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
-        const response = await fetch('/api/turn-notify/projection' + query, { signal: requestSignal })
+        requestSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal])
+        const response = await fetch('/api/turn-notify/projection', { signal: requestSignal })
         if (!response.ok) {
           void response.body?.cancel()
           return false
@@ -562,7 +623,8 @@ window.__ModuleLoader__.load({
       } catch {
         return false
       }
-      // 版本缺失即异常响应:按失败退避,防游标停滞退化成紧密首拉循环
+      if (requestSignal.aborted) return false
+      // 版本缺失即异常响应:按失败处理,由调用方通告降级
       if (typeof payload.version !== 'number') return false
       // 冷启动对齐:页面关闭/刷新期间错过的存量通知只补游标与完成标记,不轰炸呈现;
       // 错过即过期的投影设计下,重开逐条回放只剩连环提示与声音,信息价值为零
@@ -593,6 +655,8 @@ window.__ModuleLoader__.load({
       // hidden 的边界(多屏/预渲染)不静默
       const engaged = isEngaged()
       for (const unit of units) {
+        const claimed = await claimNotification(unit, requestSignal)
+        if (requestSignal.aborted) return false
         // 冷启动对齐:错过窗口期的存量通知不回放轰炸;审批与提问例外——
         // 它们在等用户动作,静默会把待办吞掉
         if (coldStart && unit.category !== 'approval' && unit.category !== 'ask') {
@@ -601,7 +665,7 @@ window.__ModuleLoader__.load({
           rememberSessionHighlight(unit, engaged)
           continue
         }
-        if (!claimEvent(unit.id)) continue
+        if (!claimed) continue
         markDone(unit.id)
         const channels = chooseChannels(engaged, notificationPermission(), Date.now() - lastActionAt(), readSoundCategories(), unit.category, unit.routes ?? null)
         const sound = resolveSound(unit.category, effectiveMapping(), uploadedIds)
@@ -631,7 +695,7 @@ window.__ModuleLoader__.load({
       return true
     }
 
-    // 单次拉取:测试入口与循环体共用;失败返回假,由调用方决定退避;
+    // 单次拉取:快照消费入口(总线 onReset/onChange 触发);失败通告降级;
     // 代际中止(HMR 换代)不算降级,不通告
     async function poll(signal) {
       const ok = await pollOnce(signal)
@@ -640,46 +704,11 @@ window.__ModuleLoader__.load({
       return ok
     }
 
-    function sleep(ms, signal) {
-      return new Promise((resolve) => {
-        if (signal.aborted) {
-          resolve()
-          return
-        }
-        const timer = setTimeout(() => {
-          signal.removeEventListener('abort', onAbort)
-          resolve()
-        }, ms)
-        if (typeof timer.unref === 'function') timer.unref()
-        const onAbort = () => {
-          clearTimeout(timer)
-          resolve()
-        }
-        signal.addEventListener('abort', onAbort, { once: true })
-      })
-    }
-
-    // 长轮询主循环:成功即立即重连(空闲期由服务端挂起兜底),失败指数退避;
-    // 处理段异常同样按失败消化,循环不静默死亡
-    async function runLoop(signal) {
-      let backoffMs = RETRY_MIN_MS
-      while (!signal.aborted) {
-        let ok = false
-        try {
-          ok = await poll(signal)
-        } catch (error) {
-          if (!signal.aborted) announceDegrade('poll', error && error.message ? error.message : String(error))
-        }
-        if (signal.aborted) break
-        if (ok) {
-          backoffMs = RETRY_MIN_MS
-          // 让出一拍:防测试 stub 立即响应时循环退化成紧密空转
-          await sleep(0, signal)
-        } else {
-          await sleep(backoffMs, signal)
-          backoffMs = Math.min(backoffMs * 2, RETRY_MAX_MS)
-        }
-      }
+    // 数据刷新唯一通道:订阅推送总线。首连 onReset 即首拉,消息到达重拉;
+    // 断线由公共 WS 总线重连,重连成功再触发 onReset 全量对账自愈
+    function startBusLoop(signal, clientBus, owner) {
+      const refresh = () => { if (activeNotificationOwner === owner && !signal.aborted) refreshNotifications() }
+      return clientBus.subscribe(refresh, { onReset: refresh })
     }
 
     async function refreshSounds() {
@@ -1018,20 +1047,58 @@ window.__ModuleLoader__.load({
       window[KEY_HL_VISIBLE] = { dispose }
     }
 
-    function start() {
-      // 代际令牌自愈:HMR 重建模块闭包后 running 归零,首启 abort 旧代长轮询,
-      // 旧连接断开、旧循环退出;遗留的非 AbortController 令牌(旧版 interval 形态)
-      // 无法中止,由页面刷新自然清偿
-      if (running) return
-      running = true
-      if (window[KEY_POLL_TOKEN] instanceof AbortController) window[KEY_POLL_TOKEN].abort()
-      const controller = new AbortController()
-      window[KEY_POLL_TOKEN] = controller
-      ensureHighlightListener()
-      ensureHighlightVisibilitySync()
-      ensureHighlightObserver()
-      refreshSounds()
-      void runLoop(controller.signal)
+    function start(clientBus) {
+      const owner = { unsubscribe: null }
+      if (notificationOwners.size === 0) {
+        const previousDispose = window[KEY_POLL_DISPOSE]
+        if (typeof previousDispose === 'function') previousDispose()
+        if (window[KEY_POLL_TOKEN] instanceof AbortController) window[KEY_POLL_TOKEN].abort()
+        const controller = new AbortController()
+        notificationController = controller
+        const snapshot = tools.createSnapshotRefresh(() => poll(controller.signal))
+        refreshNotifications = snapshot.refresh
+        window[KEY_POLL_TOKEN] = controller
+        ensureHighlightListener()
+        ensureHighlightVisibilitySync()
+        ensureHighlightObserver()
+        const highlightListener = window[KEY_HL_LISTENER]
+        const highlightVisibility = window[KEY_HL_VISIBLE]
+        const highlightObserver = window[KEY_HL_OBSERVER]
+        refreshSounds()
+        const dispose = () => {
+          if (stopNotifications !== dispose) return
+          stopNotifications = null
+          snapshot.dispose()
+          controller.abort()
+          closeClaimDb()
+          for (const item of notificationOwners) item.unsubscribe?.()
+          notificationOwners.clear()
+          activeNotificationOwner = null
+          notificationController = null
+          pruneReminders(new Set())
+          stopTitleBlink()
+          highlightVisibility?.dispose()
+          highlightObserver?.disconnect()
+          if (typeof highlightListener === 'function') document.removeEventListener('click', highlightListener, true)
+          if (typeof window[KEY_HL_FRAME] === 'number') cancelAnimationFrame(window[KEY_HL_FRAME])
+          sessionHighlights.clear()
+          clearSessionHighlightClasses()
+          for (const [key, value] of [[KEY_HL_LISTENER, highlightListener], [KEY_HL_VISIBLE, highlightVisibility], [KEY_HL_OBSERVER, highlightObserver], [KEY_POLL_TOKEN, controller], [KEY_POLL_DISPOSE, dispose]]) {
+            if (window[key] === value) delete window[key]
+          }
+        }
+        stopNotifications = dispose
+        window[KEY_POLL_DISPOSE] = dispose
+      }
+      notificationOwners.add(owner)
+      if (activeNotificationOwner === null) activeNotificationOwner = owner
+      owner.unsubscribe = startBusLoop(notificationController.signal, clientBus, owner)
+      return () => {
+        if (!notificationOwners.delete(owner)) return
+        owner.unsubscribe()
+        if (activeNotificationOwner === owner) activeNotificationOwner = notificationOwners.values().next().value || null
+        if (notificationOwners.size === 0) stopNotifications()
+      }
     }
 
     // 分类通知开关串行提交链:请求按点击顺序入队,host 终值恒为最后一次点击;
@@ -1253,7 +1320,6 @@ window.__ModuleLoader__.load({
       const [tab, setTab] = useState('通知')
 
       useEffect(() => {
-        start()
         api('/api/turn-notify/sounds').then((res) => setSounds(res.sounds || [])).catch(() => {})
         api('/api/turn-notify/config')
           .then((res) => {
@@ -1784,19 +1850,19 @@ window.__ModuleLoader__.load({
                 ' 后台委托未收尾或收尾唤醒的回合不通知(仅完成类)'),
             ]),
             field('宿主通知', [
-              h('label', { className: 'tn-meta tn-switch', title: '通知触发时由宿主进程弹系统级桌面通知(osascript/notify-send/PowerShell toast);浏览器优先:有浏览器窗口在线(2 秒内有在途长轮询)时由浏览器呈现,宿主不重复弹;浏览器全关(标签页全关)时宿主弹' },
+              h('label', { className: 'tn-meta tn-switch', title: '通知触发时由宿主进程弹系统级桌面通知(osascript/notify-send/PowerShell toast);浏览器优先:有页面订阅通知通道时由浏览器呈现,宿主不重复弹;浏览器全关(标签页全关)时宿主弹' },
                 ...switchToggle({
                   checked: config.hostNotify,
                   onChange: (e) => setConfigField('hostNotify', e.target.checked),
                 }),
                 ' 宿主机弹桌面通知'),
-              h('label', { className: 'tn-meta tn-switch', title: '浏览器在场(2 秒内有在途长轮询)时由浏览器呈现,离场时宿主补位桌面通知;与总开关判定一致,任一开启即生效' },
+              h('label', { className: 'tn-meta tn-switch', title: '有页面订阅通知通道时由浏览器呈现,离场时宿主补位桌面通知;与总开关判定一致,任一开启即生效' },
                 ...switchToggle({
                   checked: config.hostNotifyFallback,
                   onChange: (e) => setConfigField('hostNotifyFallback', e.target.checked),
                 }),
                 ' 仅当无浏览器接收时补位'),
-            ], '由宿主进程直接弹 OS 桌面通知,服务器/浏览器全关场景可达;浏览器优先——浏览器在线时由浏览器呈现,宿主不重复弹,离场(2 秒内无在途长轮询)时宿主补位,边界情况(窗口边界与网络抖动)宁重复不漏。切换即生效,测试页可逐条点火验证。'),
+            ], '由宿主进程直接弹 OS 桌面通知,服务器/浏览器全关场景可达;浏览器优先——浏览器在线时由浏览器呈现,宿主不重复弹,页面离场后宿主补位,边界情况(窗口边界与网络抖动)宁重复不漏。切换即生效,测试页可逐条点火验证。'),
             field('事件分类', h('div', { className: 'tn-pills' },
               CATEGORIES.map((category) => h('span', {
                 className: 'tn-pill' + (config.enabled[category] ? ' tn-pill--on' : ''),
@@ -2128,6 +2194,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'sessions', 'workspaces'],
       apply(ctx) {
+        const bus = tools.setupCommonTools(ctx)
         const sessions = ctx.get('sessions')
         const workspaces = ctx.get('workspaces')
         // 样式挂载宿主文档级:通知栈在面板未打开时也要有完整样式
@@ -2139,8 +2206,8 @@ window.__ModuleLoader__.load({
           document.head.appendChild(style)
           return () => style.remove()
         }, 'turn-notify styles')
-        // 激活即轮询:通知链路不依赖设置面板是否打开过
-        start()
+        // 激活即订阅:通知链路不依赖设置面板是否打开过
+        ctx.effect(() => start(bus), 'turn-notify notifications')
         // 工作区文件夹运行标记:服务快照投影 + DOM 组容器下标对位,状态变化经
         // 订阅与 DOM 变更(合并窗口)双通道驱动;开关读宿主配置,变更刷新页面生效
         let foldEnabled = null

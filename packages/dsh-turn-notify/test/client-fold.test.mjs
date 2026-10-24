@@ -94,10 +94,11 @@ function sectionStub() {
 
 // 加载 client.js 并执行 apply(mock 最小服务面),effect 函数捕获不执行;
 // MutationObserver 经工厂形参注入(源码自由变量),document 桩承载组容器查询;
-// 通知长轮询经挂起 fetch 静默(测试只驱动 fold effect,不消费投影)
+// 通知总线订阅静默(handler 捕获),测试只驱动 fold effect,不消费投影
 function loadClient() {
   const modules = []
   const effects = []
+  const busHandlers = []
   const windowStub = {
     __ModuleLoader__: { load: (module) => modules.push(module) },
     addEventListener: () => {},
@@ -111,7 +112,16 @@ function loadClient() {
     createElement: () => null,
   }
   const requireStub = (name) => {
-    if (name === '@mzzsfy/dsh-toast/client') return { show: () => 0 }
+    if (name === '@mzzsfy/dsh-common-tools/client') {
+      return {
+        createSnapshotRefresh: refresh => ({ refresh, dispose() {} }),
+        toast: { show: () => 0 },
+        setupCommonTools: () => ({ subscribe: (onMessage, { onReset } = {}) => {
+          busHandlers.push({ onMessage, onReset })
+          return () => {}
+        } }),
+      }
+    }
     return reactStub
   }
   const sections = []
@@ -173,6 +183,7 @@ function loadClient() {
     emitSessions: sessions.emit,
     setSessions: (next) => { sessionsState = next },
     setWorkspaces: (next) => { workspacesState = next },
+    busHandlers,
   }
 }
 

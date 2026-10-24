@@ -27,12 +27,13 @@ const { apply, MESSAGES } = await import('../src/index.js')
 const stateOf = (mapping) => async (target) => mapping[target] ?? TARGET_MISSING
 
 test('Given 合法请求, When resolveCloneRequest, Then 返回 url/target/shallow 原样透传', async () => {
+  const target = join(tmpdir(), 'cx-clone-target')
   const request = await resolveCloneRequest(
-    { url: 'https://github.com/user/repo.git', target: 'C:\\work\\repo', shallow: true },
-    { homedirPath: 'C:\\Users\\u', targetState: stateOf({}) },
+    { url: 'https://github.com/user/repo.git', target, shallow: true },
+    { homedirPath: tmpdir(), targetState: stateOf({}) },
   )
   assert.equal(request.url, 'https://github.com/user/repo.git')
-  assert.equal(request.target, 'C:\\work\\repo')
+  assert.equal(request.target, target)
   assert.equal(request.shallow, true)
 })
 

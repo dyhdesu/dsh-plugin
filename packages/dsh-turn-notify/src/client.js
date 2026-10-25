@@ -901,11 +901,24 @@ window.__ModuleLoader__.load({
     const FOLD_RUNNING_FLAG = 'data-tn-folder-running'
     const FOLD_SCAN_DELAY_MS = 50
 
+    // 官方 folderPath 同构:Host 拼写归一为正斜杠并去尾斜杠,大小写敏感
+    function folderPath(path) {
+      return (/^[A-Za-z]:[/\\]/.test(path) || path.startsWith('\\\\') ? path.replaceAll('\\', '/') : path).replace(/\/+$/, '')
+    }
+
+    // 官方 mainSessionId 同构:mainView 引用大于零的会话即浏览器当前会话
+    function mainSessionId(byId) {
+      for (const row of Object.values(byId)) {
+        if (row.retainedBy && (row.retainedBy.mainView || 0) > 0) return row.id
+      }
+    }
+
     // 活动与侧边栏可见性分离:隐藏子会话通过 parentId 归到可见主会话,
     // 不按 cwd 猜归属。byId 含不在 ids 中的 catalog 子行(官方同构)。
     function folderActivityOwners(sessionsState, workspacesState) {
       const byId = (sessionsState && sessionsState.byId) || {}
       const archived = new Set((workspacesState && workspacesState.archivedSessionIds) || [])
+      const current = mainSessionId(byId)
       const owners = new Map()
       for (const id of Object.keys(byId)) {
         let root = id
@@ -914,7 +927,7 @@ window.__ModuleLoader__.load({
           seen.add(root)
           const row = byId[root]
           if (row.origin !== 'subagent') {
-            if (!row.blank || root === sessionsState.current) owners.set(id, root)
+            if (!row.blank || root === current) owners.set(id, root)
             break
           }
           root = row.parentId
@@ -927,11 +940,10 @@ window.__ModuleLoader__.load({
     // Agent 状态取 uiSession.sessionStatus 的即时值优先(官方 ui-subagent 同构),
     // Bash 等后台活动取 jobs 名册;只计该会话拥有的 running/stopping 任务,
     // 名册同时可见的无主任务不得让所有文件夹误亮。完成/失败/取消均不算运行。
-    function folderRunningState(sessionsState, workspacesState, jobsState, sessionStatuses) {
+    function folderRunningState(sessionsState, workspacesState, jobsState, sessionStatuses, owners = folderActivityOwners(sessionsState, workspacesState)) {
       const byId = (sessionsState && sessionsState.byId) || {}
       const ids = (sessionsState && sessionsState.ids) || []
       const workspaces = workspacesState && Array.isArray(workspacesState.items) ? workspacesState.items : []
-      const owners = folderActivityOwners(sessionsState, workspacesState)
       const active = new Set()
       for (const [id, root] of owners) {
         const row = byId[id]
@@ -955,6 +967,33 @@ window.__ModuleLoader__.load({
       }
       const ungrouped = ids.some((id) => !accounted.has(id) && active.has(id))
       return { ids: workspaceIds, running, ungrouped }
+    }
+
+    // 官方树模式组渲染序同构:子组容器渲染在父组之后、兄弟按快照序,
+    // 先序展开与快照平铺序不一致时下标对位静默错序,宁缺不误,整体放弃标记
+    function treeModeOrderDrifts(workspacesState) {
+      const items = workspacesState && Array.isArray(workspacesState.items) ? workspacesState.items : []
+      if (items.length < 2) return false
+      const paths = items.map((workspace) => (typeof workspace.path === 'string' ? folderPath(workspace.path) : undefined))
+      const parentOf = paths.map((child, at) => {
+        let owner
+        let length = -1
+        for (let i = 0; i < paths.length; i++) {
+          const parent = paths[i]
+          if (i !== at && child && parent && child !== parent && child.startsWith(parent + '/') && parent.length > length) {
+            owner = i
+            length = parent.length
+          }
+        }
+        return owner
+      })
+      const ordered = []
+      const walk = (at) => {
+        ordered.push(at)
+        for (let i = 0; i < items.length; i++) if (parentOf[i] === at) walk(i)
+      }
+      for (let i = 0; i < items.length; i++) if (parentOf[i] === undefined) walk(i)
+      return ordered.some((at, index) => at !== index)
     }
 
     const FOLD_SWITCH_TITLE = '侧边栏会话列表按工作区分组时,有运行中会话的文件夹组头显示运行点并给文件夹图标着色,包括主回合、本地子智能体与会话自有后台任务;文件夹折叠与展开同样生效;游离会话所在的「未分组」组同样标记;单列表模式下无此标记。停用即全部隐藏,刷新页面生效。'
@@ -2266,8 +2305,12 @@ window.__ModuleLoader__.load({
               }
               const sessionsState = sessions.list.getSnapshot()
               const workspacesState = workspaces.list.getSnapshot()
-              const state = foldEnabled
-                ? folderRunningState(sessionsState, workspacesState, jobs.state.getSnapshot(), sessionStatus.getSnapshot())
+              // 树模式嵌套错序(官方树先序 ≠ 快照平铺序)宁缺不误,与停用同走放弃分支
+              const owners = foldEnabled && !treeModeOrderDrifts(workspacesState)
+                ? folderActivityOwners(sessionsState, workspacesState)
+                : null
+              const state = owners
+                ? folderRunningState(sessionsState, workspacesState, jobs.state.getSnapshot(), sessionStatus.getSnapshot(), owners)
                 : { ids: [], running: new Set(), ungrouped: false }
               const expected = state.ids.length
               // 数量不变量:组容器数 = 工作区数 或 工作区数+1(末位未分组桶);
@@ -2279,8 +2322,8 @@ window.__ModuleLoader__.load({
                 return
               }
               // 不依赖当前打开哪个会话:为可见主会话及其子树持有官方引用计数名册,
-              // 折叠组同样实时更新;关闭标记或离开分组模式即释放,不读取任务输出。
-              syncJobWatches(foldEnabled ? folderActivityOwners(sessionsState, workspacesState) : new Map())
+              // 折叠组同样实时更新;停用、漂移或离开分组模式即释放,不读取任务输出。
+              syncJobWatches(owners || new Map())
               sections.forEach((section, index) => {
                 const running = index < expected ? state.running.has(state.ids[index]) : ungroupedLast && state.ungrouped
                 // 同值跳过:流式输出期间扫描高频,重复写属性触发无谓的 CSS 重匹配

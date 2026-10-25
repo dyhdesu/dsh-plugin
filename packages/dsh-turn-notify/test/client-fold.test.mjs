@@ -18,10 +18,11 @@ const PURE_END = CLIENT_SRC.indexOf('// ---- 点击直达会话')
 assert.ok(PURE_START >= 0 && PURE_END > PURE_START, 'client.js 文件夹运行标记纯函数切片定位失败')
 const pure = new Function(
   CLIENT_SRC.slice(PURE_START, PURE_END)
-  + '; return { folderRunningState: folderRunningState, sectionSelector: FOLD_SECTION_SELECTOR, runningFlag: FOLD_RUNNING_FLAG, scanDelayMs: FOLD_SCAN_DELAY_MS }',
+  + '; return { folderRunningState: folderRunningState, folderActivityOwners: folderActivityOwners, treeModeOrderDrifts: treeModeOrderDrifts, sectionSelector: FOLD_SECTION_SELECTOR, runningFlag: FOLD_RUNNING_FLAG, scanDelayMs: FOLD_SCAN_DELAY_MS }',
 )()
 
 const WS = (id, sessionIds) => ({ workspaceId: id, sessionIds })
+const WSP = (id, path, sessionIds) => ({ workspaceId: id, path, sessionIds })
 const ROW = (id, extra) => ({ id, ...extra })
 
 test('folderRunningState 主路径:运行中会话所在工作区入集合,非运行中不入', () => {
@@ -54,9 +55,8 @@ test('folderRunningState 排除项:无父级 subagent、已归档、空白非当
       sub: ROW('sub', { running: true, origin: 'subagent' }),
       arch: ROW('arch', { running: true }),
       blank: ROW('blank', { running: true, blank: true }),
-      cur: ROW('cur', { running: true, blank: true }),
+      cur: ROW('cur', { running: true, blank: true, retainedBy: { mainView: 1 } }),
     },
-    current: 'cur',
   }
   const workspaces = {
     items: [WS('w1', ['sub']), WS('w2', ['arch']), WS('w3', ['blank']), WS('w4', ['cur'])],
@@ -142,6 +142,32 @@ test('folderRunningState 归档或空白根、孤儿和循环子代理不误标,
   sessions.byId.child = ROW('child', { origin: 'subagent', parentId: 'root', running: true })
   ws.archivedSessionIds = ['root', 'fork']
   assert.equal(pure.folderRunningState(sessions, ws).running.size, 0)
+})
+
+test('folderRunningState 归档子链中段:链上中段归档即截断,子代理与根均不活动', () => {
+  const sessions = { ids: ['root'], byId: {
+    root: ROW('root', { running: false }),
+    mid: ROW('mid', { origin: 'subagent', parentId: 'root', running: true }),
+    leaf: ROW('leaf', { origin: 'subagent', parentId: 'mid', running: true }),
+  } }
+  const ws = { items: [WS('w1', ['root'])], archivedSessionIds: ['mid'] }
+  const state = pure.folderRunningState(sessions, ws)
+  assert.equal(state.running.size, 0, '中段归档截断整链')
+  const openOwners = pure.folderActivityOwners(sessions, { items: [] })
+  assert.equal(openOwners.get('leaf'), 'root', '归档集合为空时叶链通到根')
+  assert.equal(openOwners.get('mid'), 'root', '归档集合为空时中段链通到根')
+})
+
+test('treeModeOrderDrifts:路径前缀嵌套且树先序异于快照序时漂移', () => {
+  const drift = { items: [WSP('child', '/proj/sub', []), WSP('parent', '/proj', [])] }
+  assert.equal(pure.treeModeOrderDrifts(drift), true, '父在子后,先序父先渲染,平铺序错位')
+  const aligned = { items: [WSP('parent', '/proj', []), WSP('child', '/proj/sub', [])] }
+  assert.equal(pure.treeModeOrderDrifts(aligned), false, '先序与平铺序一致不漂移')
+  assert.equal(pure.treeModeOrderDrifts({ items: [] }), false)
+  const nested = { items: [WSP('mid', '/a/b', []), WSP('root', '/a', []), WSP('leaf', '/a/b/c', [])] }
+  assert.equal(pure.treeModeOrderDrifts(nested), true, '多级嵌套按最长前缀取父,先序错位即漂移')
+  const siblings = { items: [WSP('x', '/proj-x', []), WSP('y', '/proj-y', [])] }
+  assert.equal(pure.treeModeOrderDrifts(siblings), false, '前缀撞名不构成嵌套')
 })
 
 // ── effect 扫描接线:DOM 桩 + 捕获 effect 函数驱动 ──
@@ -493,8 +519,8 @@ test('Given 开关停用, When 拉取完成前的首次扫描, Then 不产生标
 test('Given 非当前折叠组仅有后台任务, When jobs 推送开始/结束, Then 标记实时跟随且名册幂等', async () => {
   await withFetch(undefined, async () => {
     const client = loadClient()
-    client.setSessions({ ids: ['a', 'b'], current: 'b', byId: {
-      a: ROW('a', { running: false }), b: ROW('b', { running: false }),
+    client.setSessions({ ids: ['a', 'b'], byId: {
+      a: ROW('a', { running: false }), b: ROW('b', { running: false, retainedBy: { mainView: 1 } }),
       child: ROW('child', { origin: 'subagent', parentId: 'a', running: false }),
     } })
     client.setWorkspaces({ items: [WS('w1', ['a']), WS('w2', ['b'])] })
@@ -552,6 +578,28 @@ test('Given 主会话归档或离开分组, When 重新扫描, Then 释放整棵
     await sleep(SCAN_SETTLE_MS)
     assert.equal(client.watched.size, 0)
     cleanup()
+  })
+})
+
+test('Given 树模式路径嵌套错序, When 重新扫描, Then 放弃标记并释放名册,平铺序恢复后重新激活', async () => {
+  await withFetch(undefined, async () => {
+    const client = loadClient()
+    client.setSessions({ ids: ['p'], byId: { p: ROW('p', { running: true }) } })
+    client.setWorkspaces({ items: [WSP('child', '/proj/sub', []), WSP('parent', '/proj', ['p'])] })
+    const s1 = sectionStub()
+    client.sections.push(s1, sectionStub())
+    const cleanup = client.runEffect()
+    await sleep(SCAN_SETTLE_MS)
+    assert.equal(s1.hasAttribute(pure.runningFlag), false, '树先序错位不误标')
+    assert.equal(client.watched.size, 0, '树漂移期不持名册')
+    s1.removeAttribute(pure.runningFlag)
+    client.setWorkspaces({ items: [WSP('parent', '/proj', ['p']), WSP('child', '/proj/sub', [])] })
+    client.emitWorkspaces()
+    await sleep(SCAN_SETTLE_MS)
+    assert.ok(s1.hasAttribute(pure.runningFlag), '平铺序恢复后照常标记')
+    assert.deepEqual([...client.watched], ['p'])
+    cleanup()
+    assert.equal(client.watched.size, 0)
   })
 })
 

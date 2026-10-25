@@ -57,15 +57,26 @@ function fixture(name, { manual = false } = {}) {
     const mod = definitions.get(`@mzzsfy/${name}`).factory(module => module === 'react' ? react : tools)
     return { apply() {
       const cleanups = []
+      const effect = (fn, tag) => {
+        if (tag === 'rs-workflow: session-aware flow view') return
+        const off = fn()
+        if (typeof off === 'function') cleanups.push(off)
+      }
       const ctx = {
         fiber: { entry: { options: { name: `@mzzsfy/${name}` } } },
         get: () => ({ list: { subscribe: () => () => {}, getSnapshot: () => ({}) } }),
         slots: { inject() {}, register() {} },
-        effect(fn, tag) {
-          if (tag === 'rs-workflow: session-aware flow view') return
-          const off = fn()
-          if (typeof off === 'function') cleanups.push(off)
+        // PR #3 起运行标记经 ctx.inject(['jobs','uiSession']) 嵌套 effect,
+        // 桩同步形态:注入即回调,内层 effect 沿用本桩,disposer 收集一致
+        inject(_names, fn) {
+          fn({
+            get: service => service === 'jobs'
+              ? { state: { getSnapshot: () => ({ rows: {} }), subscribe: () => () => {}, watchRows: () => () => {} } }
+              : { sessionStatus: { getSnapshot: () => new Map(), subscribe: () => () => {} } },
+            effect,
+          })
         },
+        effect,
       }
       mod.apply(ctx)
       return () => { while (cleanups.length) cleanups.pop()() }

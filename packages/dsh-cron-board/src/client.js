@@ -180,6 +180,21 @@ function scheduleTzOffset(schedule) {
 }
 
 const API_PREFIX = '/api/cron-board/'
+/* MODELKEY-BEGIN */
+// 模型表单态 key 序列化(标记段供 test/model-key.test.mjs 提取执行):
+// 模型表单态 key 分隔符:单元分隔控制字符(转义书写),provider/model id 空间不含控制字符不会碰撞
+const MODEL_KEY_SEP = '\u001f'
+// 模型表单态 key:'provider<sep>model[<sep>effort]';'' = 跟随宿主默认;effort 段省略 = 跟随模型默认
+function serializeModelKey(model) {
+  if (!model || typeof model !== 'object' || !model.provider || !model.model) return ''
+  return [model.provider, model.model, model.reasoningEffort || ''].join(MODEL_KEY_SEP)
+}
+function parseModelKey(key) {
+  const parts = String(key || '').split(MODEL_KEY_SEP)
+  if (parts.length < 2 || parts[0] === '' || parts[1] === '') return undefined
+  return parts[2] ? { provider: parts[0], model: parts[1], reasoningEffort: parts[2] } : { provider: parts[0], model: parts[1] }
+}
+/* MODELKEY-END */
 const TABS = [
   { value: 'jobs', label: '看板' },
   { value: 'envs', label: '环境变量' },
@@ -610,6 +625,8 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
           mode: job && job.session ? job.session.mode : 'fresh',
           pinnedSessionId: job && job.session ? job.session.pinnedSessionId : '',
           agentPreset: job && job.session ? job.session.agentPreset : '',
+          // 表单态为序列化 key(分隔符见 MODELKEY 段 / '' = 跟随宿主默认),提交时还原对象
+          modelKey: serializeModelKey(job && job.session ? job.session.model : undefined),
         },
       }))
       const [preview, setPreview] = useState(null)
@@ -617,8 +634,14 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
       const [error, setError] = useState(null)
       const [saving, setSaving] = useState(false)
       const [presetCatalog, setPresetCatalog] = useState({ defaultId: '', items: [] })
+      const [modelCatalog, setModelCatalog] = useState({ default: null, items: [], failures: [] })
       const set = (patch) => setForm((prev) => ({ ...prev, ...patch }))
       const setSession = (patch) => setForm((prev) => ({ ...prev, session: { ...prev.session, ...patch } }))
+      // 模型选择派生态:modelKey 仍指向目录中存在的项才有效(目录刷新后残留项回退默认)
+      const modelSelected = parseModelKey(form.session.modelKey)
+      const selectedModelMeta = modelSelected
+        ? (modelCatalog.items.find((group) => group.provider === modelSelected.provider) || { models: [] }).models.find((model) => model.id === modelSelected.model)
+        : null
       const applyScheduleState = (next) => {
         // custom 频率下表达式携带合法后缀时以表达式为准(剥离归一并回填时区);
         // 无后缀保留调用方传入的时区(select 与频率切换不丢配置);非法后缀原文保留且时区置空
@@ -639,6 +662,10 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
         let alive = true
         request('GET', 'agent-presets').then((outcome) => {
           if (alive && outcome.ok && outcome.data && Array.isArray(outcome.data.items)) setPresetCatalog(outcome.data)
+        })
+        // 模型目录同源拉取:失败或宿主不支持即空目录,仅「跟随宿主默认」可选
+        request('GET', 'model-catalog').then((outcome) => {
+          if (alive && outcome.ok && outcome.data && Array.isArray(outcome.data.items)) setModelCatalog(outcome.data)
         })
         return () => { alive = false }
       }, [])
@@ -662,7 +689,12 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
         setError(null)
         const payload = { ...form }
         payload.concurrency = form.concurrency === '' ? undefined : Number(form.concurrency)
-        payload.session = form.kind === 'session' ? form.session : undefined
+        // 副本上还原模型对象:state 内对象不得突变,保存失败重开表单时 modelKey 仍在
+        payload.session = form.kind === 'session' ? { ...form.session } : undefined
+        if (payload.session) {
+          payload.session.model = parseModelKey(form.session.modelKey)
+          delete payload.session.modelKey
+        }
         const outcome = await request(editing ? 'PATCH' : 'POST', editing ? 'jobs/' + job.id : 'jobs', payload)
         setSaving(false)
         if (outcome.ok) onDone()
@@ -728,6 +760,34 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
                 },
                   h('option', { value: '' }, '跟随宿主默认'),
                   presetCatalog.items.map((item) => h('option', { key: item.id, value: item.id }, item.label)))),
+              h(Field, {
+                label: '模型',
+                hint: modelCatalog.failures.length > 0
+                  ? '部分 provider 目录加载失败:' + modelCatalog.failures.map((item) => item.name || item.id).join('、')
+                  : '仅作用于本任务的会话;跟随宿主默认时不改变任何全局设置',
+              },
+                h('select', {
+                  className: 'cb-select',
+                  value: modelSelected ? serializeModelKey(modelSelected) : form.session.modelKey,
+                  onChange: (e) => setSession({ modelKey: e.target.value }),
+                },
+                  h('option', { value: '' }, '跟随宿主默认'),
+                  modelCatalog.items.map((group) => h('optgroup', { key: group.provider, label: group.name },
+                    group.models.map((model) => {
+                      // 选项 value 统一经 serializeModelKey 产出:与解析侧同分隔符,防三侧漂移
+                      const value = serializeModelKey({ provider: group.provider, model: model.id, ...(model.efforts.length > 0 && model.defaultEffort ? { reasoningEffort: model.defaultEffort } : {}) })
+                      return h('option', { key: value, value }, model.name)
+                    }))))),
+              modelSelected && selectedModelMeta && selectedModelMeta.efforts.length > 0
+                ? h(Field, { label: '推理强度', hint: '仅作用于本任务;跟随模型默认时由模型解析' },
+                    h('select', {
+                      className: 'cb-select',
+                      value: modelSelected.reasoningEffort || '',
+                      onChange: (e) => setSession({ modelKey: serializeModelKey({ ...modelSelected, reasoningEffort: e.target.value }) }),
+                    },
+                      h('option', { value: '' }, '跟随模型默认'),
+                      selectedModelMeta.efforts.map((effort) => h('option', { key: effort.id, value: effort.id }, effort.name))))
+                : null,
               h(Field, { label: '任务文本', hint: '投递给会话的任务内容,环境变量会折叠在文本前部' },
                 h('textarea', { value: form.prompt, onChange: (e) => set({ prompt: e.target.value }) }))),
         h('div', { className: 'cb-inline' },
@@ -1021,6 +1081,7 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
                 h('span', { className: 'cb-badge' }, TRIGGER_META[run.trigger] ? TRIGGER_META[run.trigger].label : run.trigger),
                 h('span', { className: 'cb-meta' }, formatDateTime(run.createdAt, displayTzOffset)),
                 typeof run.durationMs === 'number' ? h('span', { className: 'cb-meta' }, formatDuration(run.durationMs)) : null,
+                run.model ? h('span', { className: 'cb-badge' }, run.model) : null,
                 run.message ? h('span', { className: 'cb-meta' }, run.message) : null,
                 h('div', { className: 'cb-actions' },
                   h('button', { className: 'cb-icon', onClick: () => openLog(run) }, '日志'),

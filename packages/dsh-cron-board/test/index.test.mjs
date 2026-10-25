@@ -513,3 +513,64 @@ test('0.1.7 形态:settings 注入回调不因 register 缺失抛错', () => {
   // Then 注入回调静默返回,无异常
   apply(ctx, config)
 })
+
+test('index:model-catalog 路由经装配链收到 sessionController(传递契约)', async (t) => {
+  // Given 装配桩:sessionController 带 modelCatalog 面(镜像 0.2.1-rc.2 形态);请求走惰性初始化,须隔离数据目录
+  const dir = await mkdtemp(join(tmpdir(), 'cron-board-idx-mc-'))
+  t.after(async () => {
+    delete process.env.DSH_CRON_BOARD_DATA_DIR
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  })
+  process.env.DSH_CRON_BOARD_DATA_DIR = dir
+  const routes = new Map()
+  const sessionController = {
+    create: async () => ({ sessionId: 's-x' }),
+    prompt: async (args, signal) => {
+      signal.throwIfAborted()
+      return { accepted: true }
+    },
+    modelCatalog: async () => ({
+      default: { provider: 'p0', model: 'm0' },
+      routableProviders: ['p1'],
+      groups: [{ id: 'p1', name: 'P1', models: [{ id: 'm1', name: 'M1' }] }],
+      failures: [],
+    }),
+  }
+  const ctx = {
+    effect(fn, label) {
+      if (label === 'cron-board session wait') { fn(); return }
+      fn()
+    },
+    inject() {},
+    get(name) {
+      if (name === 'sessionController') return sessionController
+      return undefined
+    },
+    webServer: {
+      register(route) {
+        routes.set(route.path, route.handler)
+        return () => {}
+      },
+    },
+  }
+  // When 装配,等会话轮询就绪后请求 model-catalog(轮询 250ms 周期,就绪前 ref 为空即空目录)
+  apply(ctx)
+  const handler = routes.get('/api/cron-board')
+  const requestCatalog = async () => {
+    const res = { status: null, payload: null }
+    res.writeHead = (status) => { res.status = status }
+    res.end = (text) => { res.payload = JSON.parse(text) }
+    await handler({ method: 'GET', url: '/api/cron-board/model-catalog', headers: { host: 'localhost' } }, res)
+    return res
+  }
+  let res
+  for (let waited = 0; waited < 15 * 1000; waited += 250) {
+    res = await requestCatalog()
+    if (res.payload.items.length > 0) break
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  // Then 目录经装配链透出(缺 getSessionController 传递时恒空目录直至超时)
+  assert.equal(res.status, 200)
+  assert.equal(res.payload.items.length, 1)
+  assert.equal(res.payload.items[0].provider, 'p1')
+})

@@ -115,6 +115,7 @@ export function apply(ctx, config) {
           readSidebarTab: () => readBoolean('sidebarTab', false),
           updateUiSettings,
           getAgentPresets: () => ctx.get('agentPresets'),
+          getSessionController: () => sessionControllerRef.current,
           logSystem: (line) => (ctx.logger && ctx.logger.warn ? ctx.logger.warn(line) : undefined),
           notifyChange,
         })

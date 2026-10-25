@@ -64,6 +64,7 @@ export function createExecutor({ store, logger, runner, sessionRunner, maxExpans
       if (outcome.exitCode !== undefined) patch.exitCode = outcome.exitCode
       if (outcome.message !== undefined) patch.message = outcome.message
       if (outcome.sessionId !== undefined) patch.sessionId = outcome.sessionId
+      if (outcome.model !== undefined) patch.model = outcome.model
       await store.runs.update(record.runId, patch)
       // 任务卡状态回填:看板状态点/耗时直接读任务行(手动与 cron 同源更新)
       const jobPatch = { lastStatus: outcome.status, lastDurationMs: patch.durationMs }

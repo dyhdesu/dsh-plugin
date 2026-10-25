@@ -905,6 +905,10 @@ test('激活即启动轮询:apply 注册设置分区且 start 已执行', async 
   const serviceStub = { list: { subscribe: () => () => {}, getSnapshot: () => ({}) } }
   mod.apply({
     get: (name) => (name === 'sessions' || name === 'workspaces' ? serviceStub : undefined),
+    inject: (names, callback) => {
+      assert.deepEqual(names, ['jobs', 'uiSession'])
+      callback({ get: () => ({}), effect: (fn) => { effects.push(fn()) } })
+    },
     slots: { inject: (name, fn) => { injected.push([name, fn]) } },
     effect: (fn) => { effects.push(fn()) },
   })
@@ -985,6 +989,8 @@ function activate(mod) {
   const cleanups = []
   mod.apply({
     get: (name) => (name === 'sessions' || name === 'workspaces' ? serviceStub : undefined),
+    // 模拟缺少活动服务:标记子 fiber 不激活,通知轮询仍必须正常工作。
+    inject: () => {},
     slots: { inject: () => {} },
     effect: (fn) => { const off = fn(); if (typeof off === 'function') cleanups.push(off) },
   })

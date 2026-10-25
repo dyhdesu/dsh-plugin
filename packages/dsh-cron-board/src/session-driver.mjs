@@ -114,7 +114,9 @@ export function createSessionDriver({ getSessionController, getWorkspaceRegistry
       else payload.cwd = workdir
     }
     if (agentPreset) payload.agentPreset = agentPreset
-    return sessionController.create(Object.keys(payload).length > 0 ? payload : undefined)
+    // 宿主 host 方法签名无默认参(create(request) 首行即读 request.workspaceId),
+    // 进程内直调空载必须传空对象而非 undefined
+    return sessionController.create(payload)
   }
 
   async function run({ job, env, mask, updateRecord }) {

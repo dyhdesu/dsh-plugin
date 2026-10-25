@@ -20,8 +20,10 @@ function makeStubs({ autoIdle = true, persisted = [], catalog, agentLookupError 
   const resolveAgentIds = []
   const sessionController = {
     async create(request) {
+      // 镜像宿主 host 方法契约:无默认参,首行即读 request.workspaceId(dsh-api-session-controller L756)
+      if (request === undefined || request === null) throw new TypeError("Cannot read properties of undefined (reading 'workspaceId')")
       const sessionId = 'sess-' + (++nextId)
-      const cwd = request && request.cwd
+      const cwd = request.cwd
       sessions.set(sessionId, { id: sessionId, cwd, status: 'running' })
       created.push({ sessionId, cwd })
       createRequests.push(request)

@@ -180,7 +180,7 @@ turn-notify:
 
 - 配置写入类接口(config / mapping / upload / 音效改名与删除 / 测试)带同源守卫:Origin 与 Host 不符即 403,JSON 写入另校验 content-type,阻断跨站页面 drive-by 改写配置。
 - webhookUrl 在 settings 层标记为 secret(导出与日志脱敏);面板配置接口原文回显,本机同源可读写。
-- 音效上传双重校验扩展名与真实音频内容;音效读取接口拒绝音频扩展名以外的文件。
+- 音效上传校验扩展名与大小上限(单文件 2MB/总库 10MB);真实音频内容校验在浏览器端完成(选文件即解码,失败拒收),host 接口不做内容嗅探。音效读取接口拒绝音频扩展名以外的文件。
 - 已知边界:同源守卫不防 DNS rebinding(Origin 与 Host 相等即放行)。该暴露面属 host webserver 全部 /api 路由的存量问题,应在 host 层统一解决而非逐插件补丁。
 
 ## 开发
@@ -199,4 +199,4 @@ node scripts/dev-link.mjs dsh-turn-notify   # 仓库根执行:归一 profile 依
 
 ## dsh 版本兼容
 
-按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。兼容面以窗口实测为准,不逐版本承诺。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md` 与本包 `兼容性测试.md`。
+按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。兼容面以窗口实测为准,不逐版本承诺。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md`(本地维护,不入库)与本包 `兼容性测试.md`。

@@ -1,6 +1,6 @@
 # profile 链接(开发态,唯一合法形态)
 
-profile 位于 `~/.dsh/profiles/web`。合法状态只有一种,禁止第三种:
+profile 位于 `~/.dsh/profiles/web`。dev-link 的挂载实现为 Windows junction(`mklink /J`)且 profile 路径取 `USERPROFILE`——**仅 Windows 宿主可用**;CI(linux)不经 dev-link,以钉版解析桥 + @mzzsfy 符号链接桥等效承载。合法状态只有一种,禁止第三种:
 
 1. **已发布包依赖行 = semver**:线上已有版本的包,profile 的 package.json 中依赖行必须是 `^线上最新版`,禁止 `link:` / 本地路径
 2. **未发布包依赖行 = file 协议**:线上 404 的包,依赖行由 dev-link 自动写为 `file:<仓库>/packages/<包>`(不强制先发布;junction 照挂,线上出版本后重跑 dev-link 自动归一 ^latest)

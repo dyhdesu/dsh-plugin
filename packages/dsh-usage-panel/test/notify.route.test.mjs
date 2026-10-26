@@ -235,15 +235,14 @@ test('notify-config: 并发 POST 串行化读改写, 先写不被后写基于旧
   gates.shift()()
   await waitForGate()
   gates.shift()()
-  const enableRes = await enable
+  // 两写均已放闸,完成序颠倒也不影响断言(读快照序已由串行链锁定)
+  const [enableRes, thresholdRes] = await Promise.all([enable, threshold])
   assert.equal(enableRes.status, 200)
-  const thresholdRes = await threshold
   assert.equal(thresholdRes.status, 200)
   assert.equal(writes.length, 2)
   assert.equal(writes[0].notify.enabled, true)
   assert.equal(writes[1].notify.enabled, true, '写2 读改写须含写1 的 enabled=true')
   assert.equal(writes[1].notify.balanceThreshold, 5)
-  assert.equal(writes[1].notify.balanceThreshold !== 20, true)
 })
 
 test('notify-config: 单次写失败不阻塞后续写, 失败响应 400 且错误可见', async () => {

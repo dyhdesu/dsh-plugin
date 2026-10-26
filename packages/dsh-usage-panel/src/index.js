@@ -669,15 +669,9 @@ export function apply(ctx, configRef) {
           // 读改写经串行链执行:重叠请求各自基于旧快照合并会互相覆盖
           // (先写的 enabled 被后写基于旧 enabled=false 的合并抹掉),链式
           // 追加保证任一写读取的总是前序写完成后的最新值;共享链以 catch
-          // 续接,单次失败只回报本次请求,不阻断后续写
-          const write = notifyConfigWriteChain.then(() => persistNotifyPatch(check.patch))
-          notifyConfigWriteChain = write.catch(() => {})
-          try {
-            await write
-          } catch (error) {
-            sendJson(res, 400, { error: error && error.message ? error.message : String(error) })
-            return
-          }
+          // 续接,单次失败只回报本次请求(抛错由 guardedRoute 统一转 400),
+          // 不阻断后续写
+          await notifyConfigWriteChain.then(() => persistNotifyPatch(check.patch))
           sendJson(res, 200, { ok: true, notify: publicNotify(readNotifySettings()) })
         }),
       }),

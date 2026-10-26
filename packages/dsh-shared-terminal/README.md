@@ -56,7 +56,7 @@ npm test -- /path/to/isolated-dsh-host
 
 也可设 `DSH_TEST_HOST`。runner 校验精确 Controller 版本后将绝对宿主路径传入子进程；测试 helper 从该宿主显式解析、校验并导入受支持版本的 Tools 与 Controller（同一允许表），不依赖 ESM 的 `NODE_PATH` 查找。未提供宿主且普通模块解析链缺少限定版本时明确失败，不跳过真实契约测试。
 
-测试包含真实 BrowserTerminal/xterm 的宽字符、组合字符、软换行、scrollback、alternate buffer、resize、队列与关闭竞态；其 subprocess 边界为测试替身，不等于真实 shell E2E。真实 shell、工具调度和客户端装载须在独立 `DSH_HOME`、独立 profile、独立端口中另做验收。
+测试包含真实 BrowserTerminal/xterm 的宽字符、组合字符、软换行、scrollback、alternate buffer、resize、队列与关闭竞态；UI 附着夹具按宿主能力使用 `follow/resize` 或 `attach` resize 命令帧，验证读取排在 resize 之后，且原 follower、控制者和可写权限保持不变。其 subprocess 边界为测试替身，不等于真实 shell E2E。真实 shell、工具调度和客户端装载须在独立 `DSH_HOME`、独立 profile、独立端口中另做验收。
 
 ## dsh 版本兼容
 

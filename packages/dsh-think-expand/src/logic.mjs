@@ -60,7 +60,7 @@ export function capMap(map, cap = SEEN_MAP_CAP) {
 }
 
 // 标记以登记时文本为键(消哈希碰撞类),值携带行身份供命中判定。
-function putSeen(map, uid, seen) {
+export function putSeen(map, uid, seen) {
   map.set(seen, { uid, seen })
   capMap(map)
 }
@@ -171,13 +171,24 @@ export function plan(registry, rows, options = {}) {
     }
   }
 
-  // 只处理唯一流式尾块;多行 running 或无 running 均不干预(历史批量/异常降级)。
+  // 流式目标行:优先唯一 running 尾块;宿主流式态不再标注 running 时(2026-10
+  // DOM 变更,行恒 ok)退化为最后一条可识别且正文已挂载的行。多行 running 仍
+  // 视为历史批量/异常,不干预。
   const running = []
   rows.forEach((row, index) => {
     if (row.headable && row.state === STATE_RUNNING) running.push(index)
   })
-  if (running.length !== 1) return { actions }
-  const targetIndex = running[0]
+  let targetIndex = -1
+  if (running.length === 1) targetIndex = running[0]
+  else if (running.length === 0) {
+    for (let index = rows.length - 1; index >= 0; index -= 1) {
+      if (rows[index].headable && rows[index].bodyText !== '') {
+        targetIndex = index
+        break
+      }
+    }
+  }
+  if (targetIndex < 0) return { actions }
   const target = rows[targetIndex]
 
   if (findSeenKey(registry.manual, target.uid, target.bodyText) !== null) return { actions }
@@ -209,8 +220,12 @@ export function plan(registry, rows, options = {}) {
     actions.push({ index: targetIndex, kind: 'expand' })
     if (target.uid !== undefined) capSet(registry.expanded.add(target.uid))
   }
-  // 正文未挂载时仅展开不登记,空串 seen 会污染全部前缀匹配;正文挂载后下轮补登记
-  if (target.bodyText !== '') registerCurrent(registry, target.uid, target.bodyText)
+  // 正文未挂载时仅展开不登记,空串 seen 会污染全部前缀匹配;正文挂载后下轮补登记。
+  // suppressManual 首扫遇既存展开行(无插件闩锁)时不登记:该行属中性既存形态,
+  // 登记会把下一拍的常规扫描挡在 isCurrent,手动意图识别永久失效
+  if (target.bodyText !== '' && !(target.expanded && options.suppressManual === true)) {
+    registerCurrent(registry, target.uid, target.bodyText)
+  }
   return { actions }
 }
 

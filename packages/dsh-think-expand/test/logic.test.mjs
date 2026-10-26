@@ -37,7 +37,7 @@ const collapseOf = (result, index) =>
   result.actions.filter((a) => a.index === index && a.kind === 'collapse').length
 
 function defineScenarios(prefix, L) {
-  const { createRegistry, plan, planFinal, registerCurrent, STATE_RUNNING, STATE_OK, capMap, needsReattach, SEEN_MAP_CAP, PIN_THRESHOLD_PX, isPinned, shouldPinRestore, createToolsRegistry, planTools } = L
+  const { createRegistry, plan, planFinal, registerCurrent, STATE_RUNNING, STATE_OK, capMap, needsReattach, SEEN_MAP_CAP, PIN_THRESHOLD_PX, isPinned, shouldPinRestore, createToolsRegistry, planTools, putSeen } = L
 
   // 滚动度量构造:{ scrollHeight, scrollTop, clientHeight }
   const metrics = (scrollHeight, scrollTop, clientHeight) => ({ scrollHeight, scrollTop, clientHeight })
@@ -165,9 +165,61 @@ function defineScenarios(prefix, L) {
     assert.equal(result.actions.length, 0)
   })
 
-  test(prefix + '历史会话常规扫描不干预', () => {
+  test(prefix + '历史会话常规扫描仅开最后一条(宿主流式态不再标注 running 后的兜底)', () => {
     const reg = createRegistry()
     const result = plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    assert.equal(expandOf(result, 0), 0)
+    assert.equal(expandOf(result, 1), 1)
+    assert.equal(result.actions.length, 1)
+  })
+
+  test(prefix + '尾部兜底:已读命中不开最后一条', () => {
+    const reg = createRegistry()
+    putSeen(reg.read, undefined, 'B')
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:手动命中不开最后一条', () => {
+    const reg = createRegistry()
+    putSeen(reg.manual, undefined, 'B')
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:开最后一条后登记 current,幂等无动作', () => {
+    const reg = createRegistry()
+    plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B', true, true, true)])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:新回合行出现收起旧 current 开新行', () => {
+    const reg = createRegistry()
+    plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B', true, true, true), row(OK, 'C')])
+    assert.equal(collapseOf(result, 1), 1)
+    assert.equal(expandOf(result, 2), 1)
+  })
+
+  test(prefix + '尾部兜底:空正文行不作为目标', () => {
+    const reg = createRegistry()
+    const result = plan(reg, [row(OK, '')])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:存在手动展开行不收手动行,且不再开目标(单条约束让位手动)', () => {
+    const reg = createRegistry()
+    plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    const result = plan(reg, [row(OK, 'A', true, true, false, 7), row(OK, 'B', true, true, true)])
+    const expands = expandOf(result, 0) + expandOf(result, 1)
+    assert.equal(expands, 0)
+    assert.equal(collapseOf(result, 1), 1)
+  })
+
+  test(prefix + '尾部兜底:识别失败行不作目标', () => {
+    const reg = createRegistry()
+    const result = plan(reg, [row(OK, 'B', false, false)])
     assert.equal(result.actions.length, 0)
   })
 
@@ -511,4 +563,14 @@ test('LOGIC 段与 logic.mjs 逐函数源码一致(归一化注释与空白,含�
   for (const name of ['STATE_RUNNING', 'STATE_OK', 'SEEN_MAP_CAP', 'PIN_THRESHOLD_PX', 'EXPANDED_CAP']) {
     assert.equal(client[name], logic[name], '常量漂移: ' + name)
   }
+})
+
+// Given 宿主 DOM 契约(CSS Modules 哈希类名) When 插件声明正文选择器
+// Then 思考与工具正文共用 _content_ 哈希子串(2026-10 宿主 DiscloseCard 重构,
+// 旧 thinkBody/bodyWrap 类名已从宿主消失;金丝雀锁选择器不锁哈希尾巴)
+test('正文选择器与宿主 DOM 契约同步(_content_ 哈希子串)', () => {
+  const source = readFileSync(join(PKG_ROOT, 'src', 'client.js'), 'utf8')
+  assert.match(source, /SELECTOR_BODY = '\[class\*="_content_"\]'/, '思考正文选择器过期')
+  assert.match(source, /SELECTOR_TOOL_BODY = '\[class\*="_content_"\]'/, '工具正文选择器过期')
+  assert.doesNotMatch(source, /thinkBody|bodyWrap/, '残留旧宿主类名')
 })

@@ -33,8 +33,8 @@ DeepSeek Harness 插件:流式输出思考时自动展开最新一条思考行,�
 
 ## 实现要点
 
-- Think 行识别:官方 ReasoningRow 根节点字面量属性 `[data-variant="think"]` + `data-state`,折叠头 `[data-disclosure-row]`,滚动容器 `[data-conversation-scroll]`;正文容器按 `thinkBody` 类名子串匹配(CSS Modules 哈希带前缀);识别失败即不干预。
-- 工具机(全部消息模式):第二状态机 `planTools`,独立 registry/current/manual/read,与思考机零共享状态;行根 = flowItem `[data-chat-node-key]` 全集减思考行根,可展开性按官方 `data-expandable` 标记判定(preparing 行无标记天然落选),正文按 `bodyWrap` 类名子串匹配;目标行 = 文档序最后一个可展开行(工具流 state 形态多样,不按 state 选行);手动识别仅在插件已展开过行后激活(首轮既存展开行视为中性,与思考机流式守卫同构)。
+- Think 行识别:官方 ReasoningRow 根节点字面量属性 `[data-variant="think"]` + `data-state`,折叠头 `[data-disclosure-row]`,滚动容器 `[data-conversation-scroll]`;正文容器按 `_content_` 哈希段子串匹配(DiscloseCard 2026-10 统一,思考与工具正文同构);识别失败即不干预。
+- 工具机(全部消息模式):第二状态机 `planTools`,独立 registry/current/manual/read,与思考机零共享状态;行根 = flowItem `[data-chat-node-key]` 全集减思考行根,可展开性按官方 `data-expandable` 标记判定(preparing 行无标记天然落选),正文按 `_content_` 哈希段子串匹配(与思考行同选择器);目标行 = 文档序最后一个可展开行(工具流 state 形态多样,不按 state 选行);手动识别仅在插件已展开过行后激活(首轮既存展开行视为中性,与思考机流式守卫同构)。
 - 展开/收起模拟点击折叠头(按 `aria-expanded` 判定),与官方组件状态机一致,不直改 DOM 内部状态;会话区不写任何 DOM 属性,设置卡片样式元素自带 `data-plugin` 标记(claimStyles/HMR 契约)。
 - 行标识 = 控制器侧元素稳定 uid(WeakMap 计数),标记命中 uid 优先、已见文本前缀兜底,标记载体为模块级 Map(键为登记时文本);client 端插件展开过的行另以元素 WeakSet 记闩锁(展开记入、收起解除,会话切换重置),供决策层区分手动展开,不写 DOM 属性;全部标记随页面生命周期存活,不持久化。body 哨兵观察器常驻 document.body 监视容器身份变化(会话切换,仅 childList 通道);容器重挂后首扫抑制手动识别,既存展开行视为中性;观察器句柄挂 window 代际槽,HMR 重评估先拆上一代,防多套决策机并行同扫。
 - 纯逻辑层(行分类、展开决策、标记存活性、置底判定、工具机)在 `src/logic.mjs`,`src/client.js` 内嵌同源实现,`node --test` 以同一套 BDD 场景对两份实现做 parity 验证,并逐函数对比源码文本(含内部助手)防双写漂移。

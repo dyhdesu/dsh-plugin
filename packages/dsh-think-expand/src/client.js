@@ -25,9 +25,10 @@ window.__ModuleLoader__.load({
     // 工具机行根:flowItem 全集(控制器排除思考行根);宿主每 flowItem 渲染单行
     const SELECTOR_ANY_ROW = '[data-chat-node-key]'
     const SELECTOR_HEAD = '[data-disclosure-row]'
-    // body 类名经 CSS Modules 哈希带前缀(如 QWLzlG_thinkBody / CY-8Ka_bodyWrap),按子串匹配
-    const SELECTOR_BODY = '[class*="thinkBody"]'
-    const SELECTOR_TOOL_BODY = '[class*="bodyWrap"]'
+    // body 类名经 CSS Modules 哈希(如 _content_1rdzk_11),按哈希段子串匹配;
+    // 思考与工具正文同构(DiscloseCard 2026-10 统一),金丝雀测试锁契约
+    const SELECTOR_BODY = '[class*="_content_"]'
+    const SELECTOR_TOOL_BODY = '[class*="_content_"]'
     const ATTR_STATE = 'data-state'
     const ATTR_EXPANDED = 'aria-expanded'
     const ATTR_EXPANDABLE = 'data-expandable'
@@ -249,13 +250,24 @@ window.__ModuleLoader__.load({
         }
       }
 
-      // 只处理唯一流式尾块;多行 running 或无 running 均不干预(历史批量/异常降级)。
+      // 流式目标行:优先唯一 running 尾块;宿主流式态不再标注 running 时(2026-10
+      // DOM 变更,行恒 ok)退化为最后一条可识别且正文已挂载的行。多行 running 仍
+      // 视为历史批量/异常,不干预。
       const running = []
       rows.forEach((row, index) => {
         if (row.headable && row.state === STATE_RUNNING) running.push(index)
       })
-      if (running.length !== 1) return { actions }
-      const targetIndex = running[0]
+      let targetIndex = -1
+      if (running.length === 1) targetIndex = running[0]
+      else if (running.length === 0) {
+        for (let index = rows.length - 1; index >= 0; index -= 1) {
+          if (rows[index].headable && rows[index].bodyText !== '') {
+            targetIndex = index
+            break
+          }
+        }
+      }
+      if (targetIndex < 0) return { actions }
       const target = rows[targetIndex]
 
       if (findSeenKey(registry.manual, target.uid, target.bodyText) !== null) return { actions }
@@ -287,8 +299,12 @@ window.__ModuleLoader__.load({
         actions.push({ index: targetIndex, kind: 'expand' })
         if (target.uid !== undefined) capSet(registry.expanded.add(target.uid))
       }
-      // 正文未挂载时仅展开不登记,空串 seen 会污染全部前缀匹配;正文挂载后下轮补登记
-      if (target.bodyText !== '') registerCurrent(registry, target.uid, target.bodyText)
+      // 正文未挂载时仅展开不登记,空串 seen 会污染全部前缀匹配;正文挂载后下轮补登记。
+      // suppressManual 首扫遇既存展开行(无插件闩锁)时不登记:该行属中性既存形态,
+      // 登记会把下一拍的常规扫描挡在 isCurrent,手动意图识别永久失效
+      if (target.bodyText !== '' && !(target.expanded && options.suppressManual === true)) {
+        registerCurrent(registry, target.uid, target.bodyText)
+      }
       return { actions }
     }
 
@@ -434,7 +450,7 @@ window.__ModuleLoader__.load({
 
     // 工具机行描述:行根为非思考行根(含无 variant 的 DisclosureRow 行);
     // expandable 按官方 data-expandable 标记(preparing 行天然无标记),
-    // 正文取工具行 bodyWrap 容器(CSS Modules 哈希前缀子串匹配)
+    // 正文取 DiscloseCard content 容器(与思考行同构,哈希段子串匹配)
     function describeToolRow(el) {
       const head = el.querySelector(SELECTOR_HEAD)
       const body = head !== null ? el.querySelector(SELECTOR_TOOL_BODY) : null
@@ -656,8 +672,13 @@ window.__ModuleLoader__.load({
       toolsFinalState.el = null
       toolsFinalState.awaitRegister = false
       toolsFinalState.pending = true
-      scanSuppressManual()
-      if (finalState.pending || (expandAll && toolsFinalState.pending)) tryPlanFinal()
+      // 首扫移入宏任务:哨兵回调的同步栈落在 React 提交窗口内,此栈中的点击
+      // 会被随后的官方重渲染冲掉(aria 翻转即被回写);宏任务点击不受影响
+      setTimeout(() => {
+        if (window[SLOT_KEY] !== slot || observedContainer !== container) return
+        scanSuppressManual()
+        if (finalState.pending || (expandAll && toolsFinalState.pending)) tryPlanFinal()
+      }, 0)
     }
 
     function scanSuppressManual() {
@@ -698,8 +719,13 @@ window.__ModuleLoader__.load({
       toolsRegistry = createToolsRegistry()
       finalState.pending = true
       toolsFinalState.pending = expandAll
-      scanSuppressManual()
-      if (finalState.pending || (expandAll && toolsFinalState.pending)) tryPlanFinal()
+      // 首扫异步化,理由同 attach:开关回调虽是手势上下文,但首扫的官方行点击
+      // 仍落在 React 受控渲染周期内,同步栈点击会被提交冲掉
+      setTimeout(() => {
+        if (window[SLOT_KEY] !== slot || observedContainer !== container) return
+        scanSuppressManual()
+        if (finalState.pending || (expandAll && toolsFinalState.pending)) tryPlanFinal()
+      }, 0)
     }
 
     // body 哨兵常驻,监视容器出现与身份变化;发现容器即挂载子树观察。

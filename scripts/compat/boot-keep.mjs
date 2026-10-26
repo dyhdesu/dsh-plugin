@@ -4,7 +4,7 @@
 // 宿主退出即按同参重启并更新 live.json(新 boot 新 token);STOP 文件存在则退出。
 // 用法:node scripts/compat/boot-keep.mjs --daemon --version <v> [--only 包,包] [--port N]
 import { spawn } from 'node:child_process'
-import { createWriteStream, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { isSemver } from './window.mjs'
 import { buildProfile, enumeratePackages } from './profile.mjs'
@@ -173,6 +173,8 @@ if (!existsSync(binPath)) throw new Error(`宿主闭包缺失,先跑 run.mjs --v
 // 存活判定自愈陈旧项,持有期写 pid,STOP 标记退出时释放
 const keeperLockPath = join(workDir, 'boot-keep.lock')
 function acquireKeeperLock() {
+  // 全新 --version 工位目录不存在,写锁 ENOENT;lock 前自建(run.mjs 安装面同构)
+  mkdirSync(workDir, { recursive: true })
   if (existsSync(keeperLockPath)) {
     let holder = null
     try { holder = JSON.parse(readFileSync(keeperLockPath, 'utf8')) } catch { /* 损坏锁按陈旧处理 */ }

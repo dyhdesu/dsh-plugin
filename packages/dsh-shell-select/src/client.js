@@ -249,12 +249,7 @@ window.__ModuleLoader__.load({
       '.sls-tv__row--exp { cursor:pointer; user-select:none; }',
       '.sls-tv__lead { display:flex; align-items:center; gap:4px; color:var(--dsw-alias-label-tertiary, inherit); }',
       // 官方 ToolRow 同构:行首仅 icon,无展开箭头(可展开性由指针与整行点击承载);
-      // 错误/进行中状态点绝对定位覆盖 icon(红点掩盖 icon)
-      '.sls-tv__leadStack { position:relative; width:16px; height:16px; display:inline-flex; align-items:center; justify-content:center; flex:none; }',
-      '.sls-tv__iconIdle { display:inline-flex; }',
-      '.sls-tv__stateCover { position:absolute; inset:0; margin:auto; display:inline-flex; align-items:center; justify-content:center; background:transparent; }',
-      '.sls-tv__stateCover::before { content:""; position:absolute; inset:-2px; border-radius:50%; background:var(--dsw-alias-bg-primary, #fff); }',
-      '.sls-tv__stateCover > span { position:relative; }',
+      // 错误/进行中状态点原位替换 icon(官方 icon 槽 StateDot 同型先例,无背景依赖)
       '.sls-tv__sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }',
       '.sls-tv__title { font-weight:400; }',
       '.sls-tv__sep { width:2px; height:2px; border-radius:1px; background:var(--dsw-alias-label-caption, currentColor); opacity:.8; flex:none; }',
@@ -428,18 +423,12 @@ window.__ModuleLoader__.load({
     }
     // LOGIC-END shellCardModel
 
-    // 官方 ToolRow leading 同构:行首仅 icon;错误/进行中状态红点叠 icon 之上
-    // (掩盖 icon,官方状态点语义)
-    function leadingStack({ status, icons }) {
+    // 行首状态节点:错误/进行中原位替换 icon(官方 icon 槽 running→StateDot 同型
+    // 先例;不叠白片遮罩——宿主无 bg-primary token,遮罩恒落 #fff 白圆,暗色刺眼)
+    function leadingNode({ status, icons }) {
       const failed = status === 'failed' || status === 'signaled' || status === 'generic-error'
       const dot = failed ? icons.StateDot({ state: 'error' }) : status === 'generic-warn' ? icons.StateDot({ state: 'warning' }) : status === 'running' ? icons.StateDot({ state: 'ongoing' }) : null
-      if (dot !== null) {
-        return h('span', { className: 'sls-tv__leadStack' },
-          h('span', { className: 'sls-tv__iconIdle' }, icons.IconApi({ size: 14 })),
-          h('span', { className: 'sls-tv__stateCover' }, dot),
-        )
-      }
-      return icons.IconApi({ size: 14 })
+      return dot !== null ? dot : icons.IconApi({ size: 14 })
     }
 
     // 时长格式:秒 → m:ss;超一小时 → h:mm:ss
@@ -536,7 +525,7 @@ window.__ModuleLoader__.load({
           } : undefined,
         },
           h('span', { className: 'sls-tv__lead' },
-            leadingStack({ status, icons: TOOLVIEW_ICONS }),
+            leadingNode({ status, icons: TOOLVIEW_ICONS }),
           ),
           h('span', { className: 'sls-tv__title' }, 'Shell'),
           summary !== '' ? h('span', { className: 'sls-tv__sep', 'aria-hidden': true }) : null,
@@ -637,7 +626,7 @@ window.__ModuleLoader__.load({
           },
         },
           h('span', { className: 'sls-tv__lead' },
-            leadingStack({ status: model.status, icons: TOOLVIEW_ICONS }),
+            leadingNode({ status: model.status, icons: TOOLVIEW_ICONS }),
           ),
           srStatus !== null ? h('span', { className: 'sls-tv__sr' }, srStatus) : null,
           h('span', { className: 'sls-tv__title' }, 'Shell'),

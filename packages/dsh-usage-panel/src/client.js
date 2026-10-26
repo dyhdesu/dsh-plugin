@@ -1083,6 +1083,10 @@ function NotifyConfigCard() {
   }
   function fail(err) {
     notify('保存失败:' + (err && err.message ? err.message : String(err)), 'error')
+    // 失败权威回填:保存被拒时本卡展示态可能已偏离服务端(前序写/他人写生效),拉权威态收敛
+    api('/api/usage-panel/notify-config')
+      .then((res) => { if (res && res.notify) setConfig(res.notify) })
+      .catch(() => {})
   }
   function patch(part) {
     api('/api/usage-panel/notify-config', { method: 'POST', body: JSON.stringify(part) })

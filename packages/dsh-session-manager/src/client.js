@@ -77,7 +77,7 @@ const CSS = [
   '.sm-dialog { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center;',
   '  background:color-mix(in srgb, var(--dsw-alias-label-primary) 45%, transparent); }',
   '.sm-dialog__card { width:min(420px, calc(100vw - 48px)); border-radius:12px; padding:20px;',
-  '  background:var(--dsw-alias-surface-primary); color:inherit;',
+  '  background:var(--dsw-alias-bg-layer-1); color:inherit;',
   '  box-shadow:var(--dsw-shadow-lv3); }',
   '.sm-dialog__title { font:var(--dsw-font-m-strong-16, 600 16px/24px sans-serif);',
   '  color:var(--dsw-alias-state-error-primary); margin:0 0 10px; }',

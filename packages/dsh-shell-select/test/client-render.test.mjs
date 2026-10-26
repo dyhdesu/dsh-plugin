@@ -175,14 +175,14 @@ test('状态点原位替换:失败/进行中只渲染状态点,不再叠图标�
     block: settledBlock(JSON.stringify({ command: 'exit 3', description: 'boom' }), 'err\n[exit code: 3]'),
     cwd: 'C:\\repo',
   }))
-  assert.ok(failed.some((node) => node.props?.style?.background === '#d4553f'), '失败行应有红色状态点')
+  assert.ok(failed.some((node) => String(node.props?.className ?? '').includes('sls-dot--err')), '失败行应有红色状态点(sls-dot--err 令牌类,主题自适应)')
   assert.ok(failed.every((node) => node.props?.style?.borderRadius !== 3), '状态点行不应再渲染降级图标矩形(叠加形态)')
   assert.ok(failed.every((node) => !String(node.props?.className ?? '').includes('stateCover')), '不应存在遮罩容器')
   const running = nodesOf(toolviewOf(loadClient(), 'shell')({
     block: { callId: 'c9', name: 'shell', argsRaw: JSON.stringify({ command: 'sleep 1', description: 'wait' }), time: Date.now() },
     cwd: 'C:\\repo',
   }))
-  assert.ok(running.some((node) => node.props?.style?.background === '#7a7f8a'), '进行中行应有状态点')
+  assert.ok(running.some((node) => String(node.props?.className ?? '').includes('sls-dot--idle')), '进行中行应有状态点(sls-dot--idle 令牌类)')
   assert.ok(running.every((node) => node.props?.style?.borderRadius !== 3), '进行中行不应再渲染降级图标矩形(叠加形态)')
   const done = nodesOf(toolviewOf(loadClient(), 'shell')({
     block: settledBlock(JSON.stringify({ command: 'echo ok', description: 'fine' }), 'ok\n[exit code: 0]'),

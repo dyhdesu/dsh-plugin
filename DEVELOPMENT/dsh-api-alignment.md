@@ -1,6 +1,6 @@
 # DSH 本体 API 对齐
 
-背景:profile 的 `@deepseek-ai/*` 一律不落盘(pnpm `autoInstallPeers: false`),插件对它们的 import 靠目录逐级兜底解析到 dsh 本体全局安装目录。dsh 本体升级(dsh-maintain 一键升级等)后,插件的宿主 API **立即**随之变化,无任何过渡。2026-09-04 dsh 0.1.2-rc.1 升级即移除了 `@deepseek-ai/dsh-settings` 模块级导出 `settingsNamespace` / `installSettingsSection` / `deepEqualJson`,并变更了 `@deepseek-ai/dsh-llm` 图片文本 API 签名,静态 import 这些导出的包当场全崩,正常包(free-search 等)无一受害。
+背景:profile 的 `@deepseek-ai/*` 一律不落盘(pnpm `autoInstallPeers: false`),插件对它们的 import 靠目录逐级兜底解析到 dsh 本体全局安装目录。dsh 本体升级(dsh-maintain 一键升级等)后,插件的宿主 API **立即**随之变化,无任何过渡。2026-09-04 dsh 0.1.2-rc.1 升级即移除了 `@deepseek-ai/dsh-settings` 模块级导出 `settingsNamespace` / `installSettingsSection` / `deepEqualJson`,并变更了 `@deepseek-ai/dsh-llm` 图片文本 API 签名,静态 import 这些导出的包当场全崩,正常包(如经 profile 安装的市场包 dsh-free-search)无一受害。
 
 规约(违反即复现同款事故):
 

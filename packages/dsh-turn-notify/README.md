@@ -150,6 +150,7 @@ turn-notify:
     - botId: wx_xxx
       targetId: owner
   imEnabled: true                 # IM 推送总开关:关闭后不投递,目标绑定保留
+  folderRunningEnabled: true      # 工作区文件夹运行标记(侧边栏分组模式),关闭后不渲染
 ```
 
 音量、聚焦静默、分类静音等本机偏好存浏览器 localStorage,不经 yaml。

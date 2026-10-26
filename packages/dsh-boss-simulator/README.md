@@ -18,9 +18,9 @@ bundle patch(`cordis.patch.yml`)插入 `role: control` 单行(`boss-simulator-co
 
 预设会话内仅注册一个工具 `boss_simulator`(`tool` + `args` 双参数),8 个操作:
 
-`create_task` / `define_workitem` / `authorize_task` / `dispatch_run`(phase: implement/fix/accept/integrate)/ `query_tasks` / `close_task` / `request_resume` / `confirm_resume`
+`boss_simulator_create_task` / `boss_simulator_define_workitem` / `boss_simulator_authorize_task` / `boss_simulator_dispatch_run`(phase: implement/fix/accept/integrate)/ `boss_simulator_query_tasks` / `boss_simulator_close_task` / `boss_simulator_request_resume` / `boss_simulator_confirm_resume`
 
-仅管理员预设会话可执行(preset 校验 + tools.guard deny 兜底)。执行 Run 有幂等指纹与活跃冲突闸,独立验收须先有 ready_for_review 报告;恢复走 `request_resume`/`confirm_resume` 核对链。
+仅管理员预设会话可执行(preset 校验 + tools.guard deny 兜底)。执行 Run 有幂等指纹与活跃冲突闸,独立验收须先有 ready_for_review 报告;恢复走 `boss_simulator_request_resume`/`boss_simulator_confirm_resume` 核对链。
 
 ## HTTP 面(`/api/boss-simulator/*`)
 

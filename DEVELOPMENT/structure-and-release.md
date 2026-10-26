@@ -4,7 +4,7 @@
 
 - 插件一律位于 `packages/<包名>/`,npm 名为 `@mzzsfy/<包名>`,包清单 = `packages/` 下带 package.json 的目录,自动发现,不手工维护清单
 - 版本语义:feat → minor,fix/style → patch;本地 manifest 版本只允许 大于等于 线上(发布脚本强制)
-- `package-lock.json` 永不入库(.gitignore 已忽略);仓库无根 package.json,各包独立
+- `package-lock.json` 永不入库(.gitignore 已忽略);仓库根 package.json 仅为测试解析桥(private,钉版宿主 peer 同源包与 playwright,不发布),插件各包独立
 - 新建修改包后需要同步更新所有文档
 
 ## 发布(唯一入口,版本管控以 git tag 为事实源)

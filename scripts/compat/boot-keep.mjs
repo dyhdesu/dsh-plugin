@@ -160,7 +160,9 @@ async function awaitEchoReady(llmPort) {
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(2000) })
-      if (res.ok) { log(`[daemon] echo 就绪 ${url}`); return }
+      // 断言控制面响应体形态({requests,lastRequestId}):端口被无关服务占且 200 时防假绿
+      const body = await res.json().catch(() => null)
+      if (res.ok && body && Array.isArray(body.requests)) { log(`[daemon] echo 就绪 ${url}`); return }
     } catch { /* 未就绪 */ }
     await sleep(ECHO_PROBE_POLL_MS)
   }
@@ -250,7 +252,9 @@ async function bootOnce() {
     think: wantedShort.includes('dsh-think-expand'),
     llmPort: args.llmPort ?? 18123,
   })
-  if (seeded.includes('llm-pi-gateway')) await awaitEchoReady(args.llmPort ?? 18123)
+  // 探活绑意图(--only 含 gateway)而非 seed 返回值:seed 的 catch 吞错返回 []
+  // 时守卫若跟着 seed 走会静默旁路,恰是 NO_ADAPTER 最可能场景
+  if (wantedShort.includes('dsh-llm-pi-gateway')) await awaitEchoReady(args.llmPort ?? 18123)
   const bootLog = createWriteStream(join(workDir, 'boot-l3.log'), { flags: 'w' })
   const child = spawn(process.execPath, [binPath, 'web', '--no-open', '--port', String(port)], {
     cwd: profile.homeDir,

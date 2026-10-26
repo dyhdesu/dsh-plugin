@@ -274,7 +274,7 @@ window.__ModuleLoader__.load({
 
     // routes 为事件→通道路由放行名单(null=未配置全放行),语义与 core 同源。
     // 宿主通知去重由浏览器优先模型承载:浏览器在场时宿主让位,本窗口照常弹系统通知
-    function chooseChannels(hasFocus, permission, idleMs, soundCategories, category, routes) {
+    function chooseChannels(hasFocus, permission, idleMs, soundCategories, category, routes, foregroundSystem = false) {
       const idleAway = typeof idleMs === 'number' && idleMs >= IDLE_AWAY_MS
       const quiet = hasFocus && localGet(KEY_DND) !== '0' && !idleAway
       const systemEnabled = localGet(KEY_SYSTEM) !== '0'
@@ -288,7 +288,7 @@ window.__ModuleLoader__.load({
       return {
         toast: toastEnabled && routed('toast'),
         sound,
-        system: !quiet && systemEnabled && permission === 'granted' && routed('system'),
+        system: (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system'),
         blink: !quiet && systemEnabled && permission !== 'granted' && routed('blink'),
         pageSound: localGet(KEY_PAGE_SOUND) === '1' && toastEnabled && !pageCategoryMuted && !sound && routed('toast'),
       }
@@ -667,7 +667,9 @@ window.__ModuleLoader__.load({
         }
         if (!claimed) continue
         markDone(unit.id)
-        const channels = chooseChannels(engaged, notificationPermission(), Date.now() - lastActionAt(), readSoundCategories(), unit.category, unit.routes ?? null)
+        // macOS桌面前台也保留可点击系统通知；只豁免system，不改变声音或路由/权限。
+        const foregroundSystem = window.location?.protocol === 'dsh-app:' && document.documentElement?.dataset?.platform === 'darwin'
+        const channels = chooseChannels(engaged, notificationPermission(), Date.now() - lastActionAt(), readSoundCategories(), unit.category, unit.routes ?? null, foregroundSystem)
         const sound = resolveSound(unit.category, effectiveMapping(), uploadedIds)
         if (channels.toast || channels.sound || channels.system || channels.blink) {
           rememberSessionHighlight(unit, engaged)

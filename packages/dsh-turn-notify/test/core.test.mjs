@@ -407,6 +407,33 @@ test('用户行动空闲满阈值:聚焦也全通道齐发,活跃时维持聚焦
   assert.equal(chooseChannels({ ...base, idleMs: 0, focusQuiet: false }).sound, true)
 })
 
+test('桌面前台豁免:foregroundSystem 仅解除 system 聚焦静默,缺省与叠加通道零变化', () => {
+  const base = { hasFocus: true, permission: 'granted' }
+  // 缺省关闭:与显式 false 同形,不传新参的既有调用零行为变化
+  assert.deepEqual(chooseChannels({ ...base, foregroundSystem: false }), chooseChannels({ ...base }))
+  // 豁免:仅 system 穿透聚焦静默,声音与标题闪烁仍静默
+  assert.deepEqual(chooseChannels({ ...base, foregroundSystem: true }), { toast: true, sound: false, system: true, blink: false, pageSound: false })
+  // 不解除声音静默:通知声音仍不出,页内提示音照常聚焦补位
+  assert.equal(chooseChannels({ ...base, foregroundSystem: true, pageSoundEnabled: true }).sound, false)
+  assert.equal(chooseChannels({ ...base, foregroundSystem: true, pageSoundEnabled: true }).pageSound, true)
+  // 不绕过授权:未授权不弹,降级闪烁不被豁免解除(仍受聚焦静默压制)
+  assert.equal(chooseChannels({ ...base, foregroundSystem: true, permission: 'default' }).system, false)
+  assert.equal(chooseChannels({ ...base, foregroundSystem: true, permission: 'default' }).blink, false)
+  // 不绕过系统通知总开关与事件路由
+  assert.equal(chooseChannels({ ...base, foregroundSystem: true, systemEnabled: false }).system, false)
+  assert.equal(chooseChannels({ ...base, foregroundSystem: true, routes: ['toast'] }).system, false)
+  // 聚焦静默关闭时豁免无增益:quiet 本为 false
+  assert.equal(
+    chooseChannels({ ...base, foregroundSystem: true, focusQuiet: false }).system,
+    chooseChannels({ ...base, foregroundSystem: false, focusQuiet: false }).system,
+  )
+  // 空闲满阈值离开时豁免无增益:quiet 本为 false
+  assert.deepEqual(
+    chooseChannels({ ...base, foregroundSystem: true, idleMs: USER_IDLE_AWAY_MS }),
+    chooseChannels({ ...base, foregroundSystem: false, idleMs: USER_IDLE_AWAY_MS }),
+  )
+})
+
 test('webhook payload 字段映射', () => {
   const unit = buildUnit({
     id: 'n1', category: CATEGORY_DONE, status: 'completed',

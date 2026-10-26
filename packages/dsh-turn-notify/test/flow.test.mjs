@@ -717,15 +717,17 @@ test('Given 通知标题字段缺失 When 认领 Then 不挂高亮类且链路�
   assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false)
 })
 
-// 点击直达:页内卡片 onClick 聚焦窗口并模拟点击侧边栏会话行(切换会话即已读);
-// 无标题通知只聚焦不点击
-test('Given 带标题通知 When 点击页内卡片 Then 聚焦窗口并点击会话行;无标题仅聚焦', async () => {
+// 点击直达:身份走通知携带的 sessionId(uiWorkspace.openSession 延迟注入),
+// 不再按侧边栏 DOM 标题模拟点击;旧投影无 ID 只聚焦,不按同名标题猜目标会话
+test('Given 新投影携带sessionId When 点击页内卡片 Then 按ID导航;无ID旧通知仅聚焦不误点同名行', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-jump', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲', summary: '耗时 12 秒' },
+    { id: 'u-jump', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲', sessionId: 'sess-jump', summary: '耗时 12 秒' },
+    { id: 'u-legacy', category: 'ask', text: '[dsh] AI 提问: 会话甲', session: '会话甲' },
     { id: 'u-bare', category: 'error', text: '[dsh] 任务出错: 无标题' },
   ]
   const focuses = []
+  const opened = []
   const { mod, shown, window: winStub } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
@@ -734,18 +736,23 @@ test('Given 带标题通知 When 点击页内卡片 Then 聚焦窗口并点击�
   winStub.focus = () => { focuses.push('focus') }
   await mod.__test.poll()
   await mod.__test.poll()
-  assert.equal(shown.length, 2)
+  assert.equal(shown.length, 3)
   // 摘要随文本两行呈现
   assert.ok(shown[0].text.includes('\n耗时 12 秒'), '卡片文本含小结行')
-  assert.equal(typeof shown[0].opts.onClick, 'function', '带标题通知携带直达回调')
-  assert.equal(typeof shown[1].opts.onClick, 'function', '无标题通知仍携带回调(仅聚焦)')
+  assert.equal(typeof shown[0].opts.onClick, 'function', '页内卡片携带直达回调')
+  // 绑定会话导航服务:uiWorkspace 软依赖注入(缺席时仅禁用直达不阻断通知)
+  activate(mod, { openSession: (id) => { opened.push(id) } })
   shown[0].opts.onClick()
   assert.deepEqual(focuses, ['focus'], '直达先聚焦窗口')
-  assert.equal(dom.rows[0].clicks, 1, '模拟点击侧边栏会话行切换会话')
-  const clicksBefore = dom.rows[0].clicks
+  assert.deepEqual(opened, ['sess-jump'], '按通知携带的 sessionId 导航')
+  assert.equal(dom.rows[0].clicks, 0, '不按标题模拟点击侧边栏会话行')
   shown[1].opts.onClick()
   assert.deepEqual(focuses, ['focus', 'focus'])
-  assert.equal(dom.rows[0].clicks, clicksBefore, '无标题通知不点击任何行')
+  assert.deepEqual(opened, ['sess-jump'], '旧投影没有唯一 ID 时只聚焦')
+  assert.equal(dom.rows[0].clicks, 0, '没有ID不得按标题误跳')
+  shown[2].opts.onClick()
+  assert.deepEqual(focuses, ['focus', 'focus', 'focus'])
+  assert.equal(dom.rows[0].clicks, 0, '无标题通知不触碰任何行')
 })
 
 // 二次提醒:等待用户动作的事件超时未处理补发一轮;已处理(点击行/切到会话)与投影过期不补
@@ -906,13 +913,13 @@ test('激活即启动轮询:apply 注册设置分区且 start 已执行', async 
   mod.apply({
     get: (name) => (name === 'sessions' || name === 'workspaces' ? serviceStub : undefined),
     inject: (names, callback) => {
-      assert.deepEqual(names, ['jobs', 'uiSession'])
+      assert.ok(JSON.stringify(names) === '["jobs","uiSession"]' || JSON.stringify(names) === '["uiWorkspace"]')
       callback({ get: () => ({}), effect: (fn) => { effects.push(fn()) } })
     },
     slots: { inject: (name, fn) => { injected.push([name, fn]) } },
     effect: (fn) => { effects.push(fn()) },
   })
-  assert.equal(effects.length, 3, '样式、通知订阅与文件夹运行标记三个 effect 均已挂载')
+  assert.equal(effects.length, 4, '会话导航、文档级样式、通知订阅与文件夹运行标记四个 effect 均已挂载')
   assert.equal(styleTags[0].attrs['data-plugin'], '@mzzsfy/dsh-turn-notify', '样式自带 data-plugin,防宿主 claimStyles 误归属后随他插件 HMR 整批误删')
   assert.deepEqual(injected.map(([name]) => name), ['settings.section'], '页内通知展示已移交公共依赖包,不再注入 shell.overlay')
   // start 已执行:音效清单被首拉;轮询定时器 unref,不阻止测试进程退出
@@ -982,15 +989,20 @@ test('分类通知开关提交失败:报错并以权威配置纠偏', async () =
   assert.deepEqual(configs, [{ enabled: { completed: true } }])
 })
 
-function activate(mod) {
+function activate(mod, navigator) {
   // sessions/workspaces 桩:apply 的注入面声明;fold effect 在无 querySelectorAll
   // 的 document 桩上装配即退出,不触碰订阅
   const serviceStub = { list: { subscribe: () => () => {}, getSnapshot: () => ({}) } }
   const cleanups = []
   mod.apply({
     get: (name) => (name === 'sessions' || name === 'workspaces' ? serviceStub : undefined),
-    // 模拟缺少活动服务:标记子 fiber 不激活,通知轮询仍必须正常工作。
-    inject: () => {},
+    // 模拟缺少活动服务:标记子 fiber 不激活,通知轮询仍必须正常工作;
+    // 提供导航服务时补 uiWorkspace 注入(会话导航软依赖),活动服务仍缺席
+    inject: (names, callback) => {
+      if (navigator !== undefined && names.indexOf('uiWorkspace') >= 0) {
+        callback({ get: () => navigator, effect: (fn) => { fn() } })
+      }
+    },
     slots: { inject: () => {} },
     effect: (fn) => { const off = fn(); if (typeof off === 'function') cleanups.push(off) },
   })

@@ -142,12 +142,14 @@ export function shouldNotify({ category, kind, durationMs, settings, header, wak
   return true
 }
 
-export function buildUnit({ id, category, status, sessionTitle, workspace, durationMs, ts, tokens, summary }) {
+export function buildUnit({ id, category, status, sessionId, sessionTitle, workspace, durationMs, ts, tokens, summary }) {
   const label = CATEGORY_LABELS[category] || category
   return {
     id,
     category,
     status,
+    // 会话唯一身份:点击直达按 ID 导航,缺省 null(历史投影/测试点火)只唤醒不跳转
+    sessionId: typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null,
     session: sessionTitle,
     workspace,
     durationMs,
@@ -209,7 +211,8 @@ export function collectAssistantTail(tail, sessionId, data) {
   return next
 }
 
-// 投影单元字段到 webhook 结构化字段的一比一映射(text/summary 随行)。
+// 投影单元字段到 webhook 结构化字段的一比一映射(text/summary 随行);
+// sessionId 结构化同步(null 显式随行),新增字段的消费方自行判空,向后兼容。
 export function buildWebhookPayload(unit) {
   return {
     text: unit.text,
@@ -217,6 +220,7 @@ export function buildWebhookPayload(unit) {
     event: unit.id,
     category: unit.category,
     status: unit.status,
+    sessionId: unit.sessionId,
     session: unit.session,
     workspace: unit.workspace,
     durationMs: unit.durationMs,

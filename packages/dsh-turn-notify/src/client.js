@@ -569,19 +569,14 @@ window.__ModuleLoader__.load({
     const notificationPermission = () => (typeof Notification === 'undefined' ? 'denied' : Notification.permission)
 
     // onOutcome 仅供测试路径取显示回执(onshow/onerror),真实路径吞错降级已在链路内。
-    // onclick 点击直达:聚焦窗口并切到对应会话后关闭弹窗;summary 作 body 两级呈现
+    // onclick 点击直达:唤醒窗口(桌面壳在直达动作内一并唤起)并按 ID 导航后关闭弹窗;
+    // summary 作 body 两级呈现
     function notifySystem(unit, onOutcome) {
       try {
         const notification = new Notification(unit.text, { tag: unit.id, body: unit.summary ?? '' })
         notification.onclick = () => {
-          try {
-            if (typeof window.focus === 'function') window.focus()
-            if (unit.session) {
-              const row = findSessionRow(unit.session)
-              if (row !== null && typeof row.click === 'function') row.click()
-            }
-          } catch { /* 直达失败不掩盖通知主流程 */ }
-          notification.close()
+          try { activateSessionFromUnit(unit)() }
+          finally { notification.close() }
         }
         if (typeof onOutcome === 'function') {
           notification.onshow = () => { onOutcome(true) }
@@ -1000,15 +995,31 @@ window.__ModuleLoader__.load({
 
     // ---- 点击直达会话:页内卡片与系统弹窗共用 ----
 
-    // 按通知单元激活会话:聚焦窗口并模拟点击侧边栏会话行(官方行点击即切换会话);
-    // 点击事件经高亮清除委托,天然完成"查看即已读"。行未渲染(列表折叠/懒加载)
-    // 或无标题时仅聚焦窗口。
+    // 身份走通知携带的 sessionId(uiWorkspace.openSession),标题只作展示与高亮,
+    // 不按 DOM 标题猜会话。uiWorkspace 经 inject 延迟注入,缺席时仅禁用直达,
+    // 不阻断通知与设置页。
+    let sessionNavigator = null
     function activateSessionFromUnit(unit) {
       return () => {
-        if (typeof window.focus === 'function') window.focus()
-        if (!unit.session) return
-        const row = findSessionRow(unit.session)
-        if (row !== null && typeof row.click === 'function') row.click()
+        try { if (typeof window.focus === 'function') window.focus() } catch { /* 唤醒失败不阻断导航 */ }
+        // Electron 的 window.focus 不保证恢复隐藏/最小化窗口;固定协议交给桌面壳。
+        // 普通浏览器不请求,避免远程浏览器点击时意外唤起服务端机器上的 App。
+        if (window.location?.protocol === 'dsh-app:' && document.documentElement?.dataset?.platform === 'darwin') {
+          void api('/api/turn-notify/focus-desktop', { method: 'POST' })
+            .then((result) => { if (!result.ok) throw new Error(result.detail || '无法唤起桌面版') })
+            .catch(() => toast?.('无法唤起 DSH 桌面窗口，请从 Dock 打开；会话已尝试切换', { holdMs: TOAST_MS }))
+        }
+        // 历史投影和无会话测试通知不含 ID,只唤醒,不冒险跳到同名会话。
+        if (typeof unit.sessionId !== 'string' || unit.sessionId.length === 0) return
+        if (sessionNavigator === null) {
+          toast?.('会话导航尚未就绪，请稍后重试', { holdMs: TOAST_MS })
+          return
+        }
+        try {
+          sessionNavigator.openSession(unit.sessionId)
+        } catch {
+          toast?.('无法打开通知对应的会话，请在会话列表中查看', { holdMs: TOAST_MS })
+        }
       }
     }
 
@@ -2253,6 +2264,15 @@ window.__ModuleLoader__.load({
         const bus = tools.setupCommonTools(ctx)
         const sessions = ctx.get('sessions')
         const workspaces = ctx.get('workspaces')
+        // 会话导航(uiWorkspace.openSession):软依赖延迟注入,服务缺席仅禁用
+        // 通知点击直达,不阻断通知链路与设置页;卸载/换代经 effect 释放回 null
+        ctx.inject(['uiWorkspace'], (navigationCtx) => {
+          navigationCtx.effect(() => {
+            const navigator = navigationCtx.get('uiWorkspace')
+            sessionNavigator = navigator
+            return () => { if (sessionNavigator === navigator) sessionNavigator = null }
+          }, 'turn-notify session navigation')
+        })
         // 样式挂载宿主文档级:通知栈在面板未打开时也要有完整样式
         ctx.effect(() => {
           const style = document.createElement('style')

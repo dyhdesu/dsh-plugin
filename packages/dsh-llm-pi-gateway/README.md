@@ -16,7 +16,7 @@ dsh plugin --profile web add @mzzsfy/dsh-llm-pi-gateway
 | --- | --- | --- |
 | Chat Completions (`openai-completions`) | 补 `session_id`、`x-client-request-id` 请求头，值为原始 DSH `sessionId` | request_header `session_id` 或 `x-client-request-id` |
 | Responses (`openai-responses`) | 原 options 透传，保留 pi-ai 原生行为 | 当前验证的 pi-ai 默认发送上述两个头及请求体顶层 `prompt_cache_key` |
-| Anthropic Messages (`anthropic-messages`) | 注入派生 `metadata.user_id`，格式为 `<prefix>:<40 位小写十六进制>`，默认前缀 `dsh` | gjson `metadata.user_id` |
+| Anthropic Messages (`anthropic-messages`) | 注入派生 `metadata.user_id`，格式为 `<prefix>:<40 位小写十六进制>`，默认前缀 `dsh` | —(本包按 sessionId 本地派生后注入,不从上游提取；上游亲和以 Anthropic 服务端 metadata 策略为准) |
 
 Chat 补齐规则：仅在开关开启、owner 活跃、`sessionId` 为非空字符串且 `cacheRetention !== 'none'` 时生效。`options.headers` 和模型描述的 `model.headers` 中，大小写无关的显式同名键均优先，包括用于抑制头的 `null`；只补缺失键，不改写输入。请求中会发送原始 sessionId，规则沿用 Responses 的会话键语义。同会话多轮保持相同值，不同会话使用不同值。
 

@@ -54,12 +54,12 @@ pnpm config set --global minimumReleaseAge 360
 要求 Node >= 22(各包 engines 字段;其中 dsh-settings-nav-icons 为 >=20)。各包 manifest 以 `dsh.compatibility.dshReleases` 逐版本声明 DSH 完整版本兼容性(实测过的版本记 `compatible`,未经实测验证的版本声明 `unknown`,以各包 manifest 为准)。
 
 - 包内测试:18 个包全部含 test/ 目录,统一 `npm test` 入口(多数包为 `node --test "test/*.test.mjs"`;cron-board/tunnel/turn-notify/usage-panel 四包经 `--experimental-test-module-mocks --import ./test/_mocks.common-tools.mjs` 预载公共依赖桩;shared-terminal 为自定义入口 `node test/run.mjs`,以各包 scripts.test 为准)
-- CI 测试(`.github/workflows/test.yml`):push 按改动范围收敛(全部改动落在 `packages/<X>/` 只测 X + 冒烟与仓库根测试;触及非包路径回退全量),每 3 天定时与手动触发为全量;amd64/arm64 双架构并行,各跑 10 轮(smoke-load + 全部含 test/ 目录的包自动发现 + 仓库根 tests/;测试文件按平台过滤,`*.linux.test.mjs`/`*.win.test.mjs` 专属,CI 只跑 linux 侧;宿主 peer 以钉版包装入仓库根 node_modules 作解析桥,包间依赖以 @mzzsfy 符号链接解析、不经 registry,均不入库)
+- CI 测试(`.github/workflows/test.yml`):push 按改动范围收敛(全部改动落在 `packages/<X>/` 只测 X + 冒烟与仓库根测试;触及非包路径回退全量),每 3 天定时与手动触发为全量;amd64/arm64 双架构并行,各跑 10 轮(smoke-load + 全部含 test/ 目录的包自动发现 + 仓库根 tests/ + 公共模拟器 scripts/echo-upstream 测试单元;测试文件按平台过滤,`*.linux.test.mjs`/`*.win.test.mjs` 专属,CI 只跑 linux 侧;宿主 peer 以钉版包装入仓库根 node_modules 作解析桥,包间依赖以 @mzzsfy 符号链接解析、不经 registry,均不入库)
 - CI 兼容性测试(`.github/workflows/compat.yml`):每 3 天定时 + 手动触发,真实 dsh 宿主双槽窗口逐版本全家桶 boot(主测完全适配判定 + 基线不崩溃判定,均阻塞);不被 push 触发,方法见 docs/兼容性测试/测试与隔离方法.md(本地维护,不入库)
 
 ### 宿主兼容性
 
-兼容性目标策略(2026-09-27 起):双槽窗口——主测 = 各渠道 dist-tag 指向版本中最新的 rc(渠道全无 rc 时取各渠道指向版本中语义化版本最大者;与基线同版本则窗口缩为单主测),完全适配(阻塞);基线 = dist-tag `latest` 指向版本,不崩溃底线(阻塞);三版本完全兼容不再执行(难度与收益不成比例)。当前窗口实算 `node scripts/compat/window.mjs`(唯一规则实现,会随 dist-tag 滑动):以 2026-10-26 实算为 0.2.1-rc.3(主测)/ 0.2.1-rc.2(基线)。各包 manifest `dsh.compatibility.dshReleases` 为逐版本实测登记(存档非承诺,兼容面以窗口实测为准),`dsh.hostMin` 由 compat 装载层按包过滤(声明包:auto-trust-all/boss-simulator/llm-pi-gateway/shared-terminal/shell-select/tool-gate)。逐包测试进度见 docs/兼容性测试/逐包测试进度.md(仅该文件本地维护,不入库)。
+兼容性目标策略(2026-09-27 起):双槽窗口——主测 = 各渠道 dist-tag 指向版本中最新的 rc(渠道全无 rc 时取各渠道指向版本中语义化版本最大者;与基线同版本则窗口缩为单主测),完全适配(阻塞);基线 = dist-tag `latest` 指向版本,不崩溃底线(阻塞);三版本完全兼容不再执行(难度与收益不成比例)。窗口唯一规则实现为 `node scripts/compat/window.mjs`(实算随 dist-tag 滑动,本节版本号仅为写作日快照,与脚本输出不一致时以脚本为准):2026-10-26 实算 0.2.1-rc.3(主测)/ 0.2.1-rc.2(基线)。各包 manifest `dsh.compatibility.dshReleases` 为逐版本实测登记(存档非承诺,兼容面以窗口实测为准),`dsh.hostMin` 由 compat 装载层按包过滤(声明包:auto-trust-all/boss-simulator/llm-pi-gateway/shared-terminal/shell-select/tool-gate)。逐包测试进度见 docs/兼容性测试/逐包测试进度.md(仅该文件本地维护,不入库)。
 
 以下为 2026-09-27 Round 30 实测记录(历史留档,当时窗口仍为三版本:0.1.2-rc.1 基线 / 0.1.5-rc.3 主测 / 0.1.7-rc.2 完全兼容目标;其中 dsh-shell-select 预设架构当时要求 ≥0.1.7-rc.1,对当时基线不可安装——该例外随窗口滑动已不再成立,hostMin 过滤现由装载层通用承载):
 

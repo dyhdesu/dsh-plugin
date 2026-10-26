@@ -13,7 +13,7 @@
 
 ## 路由
 
-前缀 `/api/cron-board`(envs / jobs / runs / status / cron/preview / agent-presets / model-catalog),REST 风格,中文业务错误透传。
+前缀 `/api/cron-board`(envs / jobs / runs / status / cron/preview / agent-presets / model-catalog / ui-settings),REST 风格,中文业务错误透传。
 
 ## 界面挂载
 

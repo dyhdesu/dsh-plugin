@@ -2,6 +2,10 @@
 const ACK = 'ack'
 const WRITE = 'write'
 const READ_ONLY = 'read-only'
+// 写后空闲冷却:立即释放会让每次写入都经历一次 attach/detach,宿主 gateway
+// cancellableStream 的 abort 竞态偶发吞掉 UI 输出流的终止信号(phase 冻在
+// connected,渲染停摆);冷却期把竞态窗口从每写一次收敛到每轮命令一次
+const RELEASE_IDLE_MS = 10 * 1000
 
 export class AttachPump {
   #controller
@@ -13,6 +17,7 @@ export class AttachPump {
   #push
   #pending = new Map()
   #reading = false
+  #idleTimer
 
   constructor(controller, agent, id) {
     this.#controller = controller
@@ -22,6 +27,7 @@ export class AttachPump {
 
   #ensure() {
     if (this.#reading) return
+    clearTimeout(this.#idleTimer)
     this.#ac = new AbortController()
     this.#seq = 0
     const epoch = ++this.#epoch
@@ -101,14 +107,21 @@ export class AttachPump {
     }).finally(() => this.#releaseWhenIdle(epoch))
   }
 
-  // 空闲即释放附着:宿主 detach 会广播 state,UI 恢复 writable 触发官方 fit 重算几何
+  // 空闲冷却后释放附着:宿主 detach 会广播 state,UI 恢复 writable 触发官方 fit 重算几何
   // 持续附着会让 UI 长期只读,官方 fit 不跑,插件写入推高的 PTY 行数把底部推出可视区
+  // 立即释放则以每次写入为频率反复 attach/detach,触发宿主流 abort 竞态导致 UI 冻结
   #releaseWhenIdle(epoch) {
     if (this.#epoch !== epoch || this.#pending.size > 0) return
-    this.stop()
+    clearTimeout(this.#idleTimer)
+    this.#idleTimer = setTimeout(() => {
+      this.#idleTimer = undefined
+      if (this.#epoch === epoch && this.#pending.size === 0) this.stop()
+    }, RELEASE_IDLE_MS)
   }
 
   stop() {
+    clearTimeout(this.#idleTimer)
+    this.#idleTimer = undefined
     this.#ac?.abort()
     this.#reading = false
   }

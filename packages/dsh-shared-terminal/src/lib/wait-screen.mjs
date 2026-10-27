@@ -14,7 +14,7 @@ const sleep = (ms) => new Promise((resolve) => {
 
 const isTerminalState = (state) => state === 'exited' || state === 'failed'
 
-export async function waitForScreenText({ readScreen, controller, agent, id, needle, timeoutMs, signal, intervalMs = WAIT_POLL_INTERVAL_MS }) {
+export async function waitForScreenText({ readScreen, controller, agent, id, needle, timeoutMs, signal, skipSignal, intervalMs = WAIT_POLL_INTERVAL_MS }) {
   if (typeof needle !== 'string' || needle === '') throw new RangeError('needle must be a non-empty string')
   const start = Date.now()
   const deadline = start + timeoutMs
@@ -23,6 +23,7 @@ export async function waitForScreenText({ readScreen, controller, agent, id, nee
     const screen = await readScreen(controller, agent, id, MAX_SCREEN_LINES)
     if (isTerminalState(screen.state)) return { kind: 'exited', screen }
     if (screen.text.includes(needle)) return { kind: 'found', screen, elapsedMs: Date.now() - start }
+    if (skipSignal?.aborted) return { kind: 'skipped', screen }
     if (Date.now() >= deadline) return { kind: 'timeout', screen, timeoutMs }
     await sleep(intervalMs)
   }

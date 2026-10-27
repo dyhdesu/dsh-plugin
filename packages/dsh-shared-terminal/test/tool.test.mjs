@@ -117,6 +117,17 @@ test('Given malformed wait arguments, When executing, Then closed schemas reject
   assert.equal((await tool.execute({ action: 'wait', terminal_id: '', text: 'x' }, exec)).error.code, 'INVALID_ARGS')
 })
 
+test('Given the user skips the wait, When the wait returns, Then skipped carries the screen and validates closed-schema', async () => {
+  const { readScreen } = waitReadScreen([() => screen('$')])
+  // 注册即 abort,模拟用户在等待期间点「跳过等待」
+  const registry = { register(_key, controller) { controller.abort() }, release() {} }
+  const tool = makeTool(makeController(), readScreen, undefined, registry)
+  const result = await tool.execute({ action: 'wait', terminal_id: 'term-a', text: 'never', timeout_ms: 150 }, exec)
+  assert.equal(result.kind, 'skipped')
+  assert.equal(result.text, '$')
+  assert.deepEqual(validateJsonSchemaValue(tool.output.schema, result), [])
+})
+
 test('Given a wait result, When validated by Host output validator, Then all three kinds are closed-schema valid', async () => {
   for (const screens of [
     [() => screen('Build successful')],
@@ -169,8 +180,8 @@ function makeController(overrides = {}) {
   return controller
 }
 
-const makeTool = (controller, readScreen = async () => ({ text: 'screen', lines: 1, truncated: false, state: 'running', sequence: 3 }), pumpFactory) =>
-  createTerminalTool({ controller, readScreen, defineTool, pumpFactory })
+const makeTool = (controller, readScreen = async () => ({ text: 'screen', lines: 1, truncated: false, state: 'running', sequence: 3 }), pumpFactory, waitSkipRegistry) =>
+  createTerminalTool({ controller, readScreen, defineTool, pumpFactory, ...(waitSkipRegistry ? { waitSkipRegistry } : {}) })
 
 test('Given open with default dimensions, When creating terminal, Then it uses DSH controller and returns id', async () => {
   const controller = makeController()

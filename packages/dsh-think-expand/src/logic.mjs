@@ -249,20 +249,39 @@ export function createToolsRegistry() {
 export function planTools(registry, rows, options = {}) {
   const actions = []
 
+  // 工具行标记命中:uid 双侧在场即按身份命中(工具行正文会被宿主在展开后改写,
+  // 文本前缀不可靠);任一侧无 uid 退化为前缀匹配。思考机仍走文本前缀(思考正文
+  // 只追加不改写),两机匹配语义分治。
+  const seenKey = (map, uid, text) => {
+    for (const [key, entry] of map) {
+      if (uid !== undefined && entry.uid !== undefined) {
+        if (entry.uid === uid) return key
+        continue
+      }
+      if (prefixOf(entry.seen, text)) return key
+    }
+    return null
+  }
+  const isCurrentRow = (uid, text) => {
+    if (registry.current === null) return false
+    if (uid !== undefined && registry.current.uid !== undefined) return registry.current.uid === uid
+    return prefixOf(registry.current.seen, text)
+  }
+
   // 手动识别:已展开且无插件闩锁 → manual(永不干预);正文未挂载不识别。
   // 仅在插件已展开过行(current 在场)后识别:首轮既存展开行视为中性,
   // 与思考机"无 running 行不干预"同构,防首扫把用户历史展开误判挡住目标行
   if (options.suppressManual !== true && registry.current !== null) {
     for (const row of rows) {
       if (!row.expandable || !row.expanded || row.bodyText === '' || row.plugged) continue
-      if (findSeenKey(registry.marks, row.uid, row.bodyText) !== null) continue
-      if (isCurrent(registry, row.uid, row.bodyText)) continue
-      const readKey = findSeenKey(registry.read, row.uid, row.bodyText)
+      if (seenKey(registry.marks, row.uid, row.bodyText) !== null) continue
+      if (isCurrentRow(row.uid, row.bodyText)) continue
+      const readKey = seenKey(registry.read, row.uid, row.bodyText)
       if (readKey !== null) {
         if (row.uid !== undefined && registry.expanded.has(row.uid)) registry.read.delete(readKey)
         continue
       }
-      if (findSeenKey(registry.manual, row.uid, row.bodyText) === null) {
+      if (seenKey(registry.manual, row.uid, row.bodyText) === null) {
         putSeen(registry.manual, row.uid, row.bodyText)
         if (registry.current !== null) {
           const currentIndex = findRow(registry, rows)
@@ -294,9 +313,9 @@ export function planTools(registry, rows, options = {}) {
   if (targetIndex < 0) return { actions }
   const target = rows[targetIndex]
 
-  if (findSeenKey(registry.manual, target.uid, target.bodyText) !== null) return { actions }
-  if (findSeenKey(registry.read, target.uid, target.bodyText) !== null) return { actions }
-  if (isCurrent(registry, target.uid, target.bodyText)) return { actions }
+  if (seenKey(registry.manual, target.uid, target.bodyText) !== null) return { actions }
+  if (seenKey(registry.read, target.uid, target.bodyText) !== null) return { actions }
+  if (isCurrentRow(target.uid, target.bodyText)) return { actions }
 
   // 插件展开过的目标行被收起(如回合收尾重建后):登记宽松已读,不强制重展开
   if (!target.expanded && target.uid !== undefined && registry.expanded.has(target.uid)) {
@@ -307,7 +326,7 @@ export function planTools(registry, rows, options = {}) {
   // 新目标行:收起旧插件行(手动行除外),展开目标行
   if (registry.current !== null) {
     const oldIndex = findRow(registry, rows)
-    const oldIsManual = findSeenKey(registry.manual, registry.current.uid, registry.current.seen) !== null
+    const oldIsManual = seenKey(registry.manual, registry.current.uid, registry.current.seen) !== null
     const old = oldIndex >= 0 ? rows[oldIndex] : null
     if (!oldIsManual && old !== null && old.expanded) actions.push({ index: oldIndex, kind: 'collapse' })
     registry.marks.delete(registry.current.seen)

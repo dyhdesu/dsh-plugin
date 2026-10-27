@@ -328,20 +328,39 @@ window.__ModuleLoader__.load({
     function planTools(registry, rows, options = {}) {
       const actions = []
 
+      // 工具行标记命中:uid 双侧在场即按身份命中(工具行正文会被宿主在展开后改写,
+      // 文本前缀不可靠);任一侧无 uid 退化为前缀匹配。思考机仍走文本前缀(思考正文
+      // 只追加不改写),两机匹配语义分治。
+      const seenKey = (map, uid, text) => {
+        for (const [key, entry] of map) {
+          if (uid !== undefined && entry.uid !== undefined) {
+            if (entry.uid === uid) return key
+            continue
+          }
+          if (prefixOf(entry.seen, text)) return key
+        }
+        return null
+      }
+      const isCurrentRow = (uid, text) => {
+        if (registry.current === null) return false
+        if (uid !== undefined && registry.current.uid !== undefined) return registry.current.uid === uid
+        return prefixOf(registry.current.seen, text)
+      }
+
       // 手动识别:已展开且无插件闩锁 → manual(永不干预);正文未挂载不识别。
       // 仅在插件已展开过行(current 在场)后识别:首轮既存展开行视为中性,
       // 与思考机"无 running 行不干预"同构,防首扫把用户历史展开误判挡住目标行
       if (options.suppressManual !== true && registry.current !== null) {
         for (const row of rows) {
           if (!row.expandable || !row.expanded || row.bodyText === '' || row.plugged) continue
-          if (findSeenKey(registry.marks, row.uid, row.bodyText) !== null) continue
-          if (isCurrent(registry, row.uid, row.bodyText)) continue
-          const readKey = findSeenKey(registry.read, row.uid, row.bodyText)
+          if (seenKey(registry.marks, row.uid, row.bodyText) !== null) continue
+          if (isCurrentRow(row.uid, row.bodyText)) continue
+          const readKey = seenKey(registry.read, row.uid, row.bodyText)
           if (readKey !== null) {
             if (row.uid !== undefined && registry.expanded.has(row.uid)) registry.read.delete(readKey)
             continue
           }
-          if (findSeenKey(registry.manual, row.uid, row.bodyText) === null) {
+          if (seenKey(registry.manual, row.uid, row.bodyText) === null) {
             putSeen(registry.manual, row.uid, row.bodyText)
             if (registry.current !== null) {
               const currentIndex = findRow(registry, rows)
@@ -373,9 +392,9 @@ window.__ModuleLoader__.load({
       if (targetIndex < 0) return { actions }
       const target = rows[targetIndex]
 
-      if (findSeenKey(registry.manual, target.uid, target.bodyText) !== null) return { actions }
-      if (findSeenKey(registry.read, target.uid, target.bodyText) !== null) return { actions }
-      if (isCurrent(registry, target.uid, target.bodyText)) return { actions }
+      if (seenKey(registry.manual, target.uid, target.bodyText) !== null) return { actions }
+      if (seenKey(registry.read, target.uid, target.bodyText) !== null) return { actions }
+      if (isCurrentRow(target.uid, target.bodyText)) return { actions }
 
       // 插件展开过的目标行被收起(如回合收尾重建后):登记宽松已读,不强制重展开
       if (!target.expanded && target.uid !== undefined && registry.expanded.has(target.uid)) {
@@ -386,7 +405,7 @@ window.__ModuleLoader__.load({
       // 新目标行:收起旧插件行(手动行除外),展开目标行
       if (registry.current !== null) {
         const oldIndex = findRow(registry, rows)
-        const oldIsManual = findSeenKey(registry.manual, registry.current.uid, registry.current.seen) !== null
+        const oldIsManual = seenKey(registry.manual, registry.current.uid, registry.current.seen) !== null
         const old = oldIndex >= 0 ? rows[oldIndex] : null
         if (!oldIsManual && old !== null && old.expanded) actions.push({ index: oldIndex, kind: 'collapse' })
         registry.marks.delete(registry.current.seen)
@@ -514,15 +533,16 @@ window.__ModuleLoader__.load({
     // 单一挂起回补任务(slot 代际槽):同批多动作时以最新前置度量重启,
     // HMR 重评估经槽身份校验作废。
     function schedulePinRestore(target, before) {
-      if (window[SLOT_KEY] !== slot) return
-      if (slot.pinFrame !== null) cancelAnimationFrame(slot.pinFrame)
+      const owner = slot
+      if (!isActive(owner)) return
+      if (owner.pinFrame !== null) cancelAnimationFrame(owner.pinFrame)
       let lastHeight = before.scrollHeight
       let changed = false
       let stableFrames = 0
       let totalFrames = 0
       const tick = () => {
-        slot.pinFrame = null
-        if (window[SLOT_KEY] !== slot || target !== observedContainer || !target.isConnected) return
+        owner.pinFrame = null
+        if (!isActive(owner) || target !== observedContainer || !target.isConnected) return
         const metrics = containerMetrics(target)
         if (metrics.scrollHeight !== lastHeight) {
           lastHeight = metrics.scrollHeight
@@ -533,12 +553,12 @@ window.__ModuleLoader__.load({
         }
         totalFrames += 1
         if (totalFrames < PIN_SETTLE_MAX_FRAMES && (!changed || stableFrames < PIN_SETTLE_FRAMES)) {
-          slot.pinFrame = requestAnimationFrame(tick)
+          owner.pinFrame = requestAnimationFrame(tick)
           return
         }
         if (shouldPinRestore(before, metrics)) target.scrollTop = target.scrollHeight
       }
-      slot.pinFrame = requestAnimationFrame(tick)
+      owner.pinFrame = requestAnimationFrame(tick)
     }
 
     function scan() {
@@ -634,12 +654,12 @@ window.__ModuleLoader__.load({
 
     // 计时单点挂 slot(代际槽):旧代残余回调(disconnect 不取消已入队微任务)
     // 经槽身份校验作废,防上一代决策机与新代同扫并发点击
-    function scheduleScan() {
-      if (window[SLOT_KEY] !== slot) return
-      if (slot.debounceTimer !== null) clearTimeout(slot.debounceTimer)
-      slot.debounceTimer = setTimeout(() => {
-        slot.debounceTimer = null
-        if (window[SLOT_KEY] !== slot) return
+    function scheduleScan(owner = slot) {
+      if (!isActive(owner)) return
+      if (owner.debounceTimer !== null) clearTimeout(owner.debounceTimer)
+      owner.debounceTimer = setTimeout(() => {
+        owner.debounceTimer = null
+        if (!isActive(owner)) return
         registerFinal()
         if (scan() === 0) finalState.pending = true
         else if (finalState.pending || (expandAll && toolsFinalState.pending)) tryPlanFinal()
@@ -648,7 +668,8 @@ window.__ModuleLoader__.load({
 
     // 容器身份变化(会话切换节点替换)由 body 哨兵捕获:容器自身被移除不在
     // 容器观察器的子树范围内,哨兵是唯一能发现替换的入口
-    function ensureAttached() {
+    function ensureAttached(owner = slot) {
+      if (!isActive(owner)) return
       const container = document.querySelector(SELECTOR_SCROLL)
       if (container === null) return
       if (needsReattach(observedContainer, container)) attach(container)

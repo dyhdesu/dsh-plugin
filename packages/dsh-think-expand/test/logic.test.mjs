@@ -452,6 +452,30 @@ function defineScenarios(prefix, L) {
     assert.equal(result.actions.length, 0)
   })
 
+  test(prefix + '工具机:目标行展开后宿主改写正文,uid 身份仍命中,不误判手动不误收', () => {
+    // Given 工具行已由插件展开并登记 current(正文为登记时快照)
+    const reg = createToolsRegistry()
+    planTools(reg, [toolRow(false, true, false, 7, 'A'.repeat(31))])
+    assert.notEqual(reg.current, null)
+    // When 宿主改写正文为等长无关文本(非前缀关系)且行保持展开
+    const rewritten = planTools(reg, [toolRow(true, true, true, 7, 'B'.repeat(36))])
+    // Then 无任何动作:不误判手动、不接管收起自己、current 保持
+    assert.equal(rewritten.actions.length, 0)
+    assert.equal(reg.manual.size, 0)
+    assert.notEqual(reg.current, null)
+  })
+
+  test(prefix + '工具机:正文改写后的收起仍走已读登记(uid 兜底)', () => {
+    const reg = createToolsRegistry()
+    planTools(reg, [toolRow(false, true, false, 7, 'A'.repeat(31))])
+    // When 宿主改写正文后行被收起
+    const result = planTools(reg, [toolRow(false, true, false, 7, 'B'.repeat(36))])
+    // Then 不重展开,已读落盘(uid 限定),current 释放
+    assert.equal(result.actions.filter((a) => a.kind === 'expand').length, 0)
+    assert.notEqual(reg.read.size, 0)
+    assert.equal(reg.current, null)
+  })
+
   test(prefix + '工具机:suppressManual 首扫既存展开行视为中性', () => {
     const reg = createToolsRegistry()
     const result = planTools(reg, [toolRow(true, true, false, 9)], { suppressManual: true })

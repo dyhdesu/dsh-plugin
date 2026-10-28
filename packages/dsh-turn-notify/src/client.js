@@ -1623,6 +1623,16 @@ window.__ModuleLoader__.load({
         })
       }
 
+      // 轻叮"试听":按页内场景解析播放任务完成分类实际会响的叮(页内配置覆盖,缺省沿用提示音)
+      function previewCurrentPageSound() {
+        const sound = resolveSound('completed', mergeMapping(effective, pageMapping), soundIds)
+        playAudible(sound).then((result) => {
+          patch(result.ok
+            ? '已轻叮:' + describeSound(sound)
+            : '未播放:' + result.reason, result.ok ? 'ok' : 'error')
+        })
+      }
+
       // 开关字段变更即存:乐观回填,失败由响应回滚
       function setConfigField(name, value) {
         setConfig((current) => ({ ...current, [name]: value }))
@@ -2187,6 +2197,7 @@ window.__ModuleLoader__.load({
                   }, CATEGORY_LABELS[category])),
                   h('span', { className: 'tn-meta' }, '亮=叮,暗=静音'),
                 ),
+                testButton('试听', '播一声"任务完成"现在实际会响的"叮";其他类别用下方逐类试听', previewCurrentPageSound),
               ]),
               CATEGORIES.map((category) => field(CATEGORY_LABELS[category], [
                 h('select', {

@@ -1035,7 +1035,7 @@ window.__ModuleLoader__.load({
       return ordered.some((at, index) => at !== index)
     }
 
-    const FOLD_SWITCH_TITLE = '侧边栏会话列表按工作区分组时,有运行中会话的文件夹组头显示运行点并给文件夹图标着色,包括主回合、本地子智能体与会话自有后台任务;文件夹折叠与展开同样生效;游离会话所在的「未分组」组同样标记;单列表模式下无此标记。停用即全部隐藏,刷新页面生效。'
+    const FOLD_SWITCH_TITLE = '侧边栏会话列表按工作区分组时,有运行中会话的文件夹组头显示运行点并给文件夹图标着色,包括主回合、本地子智能体与会话自有后台任务;文件夹折叠与展开同样生效;游离会话所在的「未分组」组同样标记;单列表模式下无此标记。存宿主配置,各浏览器共用;停用即全部隐藏,刷新页面生效。'
 
     // ---- 点击直达会话:页内卡片与系统弹窗共用 ----
 
@@ -1223,6 +1223,11 @@ window.__ModuleLoader__.load({
 
     const PERMISSION_LABELS = { granted: '已授权', denied: '已拒绝', default: '未授权' }
 
+    // 卡片头:仅标题,详细说明一律走行内控件 title
+    function fieldHead(title) {
+      return h('div', { className: 'tn-card__head' }, h('span', { className: 'tn-card__title' }, title))
+    }
+
     // 面板表单占位:GET config 返回前展示;webhookUrl 原文随响应回显,表单所见即所存;
     // imAvailable 缺省为假,加载响应后 dsh-im 在场才渲染 IM 投递卡
     const DEFAULT_CONFIG = {
@@ -1261,13 +1266,10 @@ window.__ModuleLoader__.load({
       '  display:flex; flex-direction:column; gap:12px; }',
       '.tn-card__head { display:flex; flex-direction:column; gap:2px; }',
       '.tn-card__title { font-weight:600; font-size:13px; color:var(--dsw-alias-label-primary); }',
-      '.tn-card__sub { color:var(--dsw-alias-label-tertiary); font-size:12px; }',
-      // 表单行:左标签右控件的 grid,说明文字折行到控件列下方,行结构不随内容换行漂移
+      // 表单行:左标签右控件的 grid,行结构不随内容换行漂移
       '.tn-field { display:grid; grid-template-columns:76px minmax(0, 1fr); gap:8px 12px; align-items:center; }',
       '.tn-field__label { color:var(--dsw-alias-label-secondary); font-size:12px; }',
       '.tn-field__control { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }',
-      '.tn-field__hint { grid-column:2; color:var(--dsw-alias-label-tertiary);',
-      '  font-size:11.5px; line-height:1.5; }',
       '.tn-meta { color:var(--dsw-alias-label-secondary); font-size:12px; }',
       '.tn-error { color:var(--dsw-alias-state-error-primary); }',
       '.tn-btn { cursor:pointer; border:1px solid var(--dsw-alias-border-l2);',
@@ -1375,12 +1377,11 @@ window.__ModuleLoader__.load({
       ]
     }
 
-    // 表单行:左标签右控件的固定两列,说明文字折行到控件列下方
-    function field(label, control, hint) {
+    // 表单行:左标签右控件的固定两列
+    function field(label, control) {
       return h('div', { className: 'tn-field' },
         h('span', { className: 'tn-field__label' }, label),
         h('div', { className: 'tn-field__control' }, control),
-        hint !== undefined ? h('div', { className: 'tn-field__hint' }, hint) : null,
       )
     }
 
@@ -1914,14 +1915,11 @@ window.__ModuleLoader__.load({
         ),
         h('div', { className: 'tn-tabpanel', role: 'tabpanel' },
           activeTab === '通知' ? h('div', { className: 'tn-card' },
-            h('div', { className: 'tn-card__head' },
-              h('span', { className: 'tn-card__title' }, '通知配置'),
-              h('span', { className: 'tn-card__sub' }, '六类事件的触发与过滤;全部改动即时生效'),
-            ),
+            fieldHead('通知配置'),
             field('webhook', [
               h('input', {
                 className: 'tn-input tn-fill', type: 'text',
-                title: '通知由 host 直接 POST 到该地址,标签页全关也送达;Slack 兼容 JSON 格式,超时 10 秒不重试',
+                title: '通知由 host 直接 POST 到该地址,标签页全关也送达;Slack 兼容 JSON 格式,超时 10 秒不重试;失焦即提交,清空并失焦即禁用',
                 placeholder: 'Slack-compatible URL,留空禁用',
                 value: urlDraft,
                 onChange: (e) => setUrlDraft(e.target.value),
@@ -1930,16 +1928,16 @@ window.__ModuleLoader__.load({
               String(config.webhookUrl || '').trim().length > 0
                 ? h('button', { className: 'tn-btn tn-btn--danger', disabled: busy, title: '清除已配置的 webhook,清除后该通道禁用', onClick: () => void clearWebhook() }, '清除')
                 : null,
-            ], '失焦即提交输入框内容,清空并失焦即禁用;测试按钮只测已保存配置'),
+            ]),
             field('最短回合时长', [
               h('input', {
                 className: 'tn-input', type: 'number', min: 0, step: 500, style: { width: '90px' },
-                title: '过滤连续快速的小回合(如自动压缩、状态刷新);默认 5000 毫秒,设为 0 关闭过滤',
+                title: '过滤连续快速的小回合(如自动压缩、状态刷新),回合结束类通知短于此时长不送达,提问与审批请求即时送达;默认 5000 毫秒,设为 0 关闭过滤;失焦即提交',
                 value: config.minTurnDurationMs,
                 onChange: (e) => setConfig({ ...config, minTurnDurationMs: e.target.value }),
                 onBlur: () => saveMinTurnOnBlur(),
               }),
-              h('span', { className: 'tn-meta' }, '毫秒,回合结束类通知短于此时长不送达;提问与审批请求即时送达'),
+              h('span', { className: 'tn-meta' }, '毫秒'),
             ]),
             field('子代理过滤', [
               h('label', { className: 'tn-meta tn-switch', title: '子代理是主会话委托出去的独立会话;开启后子代理自身的完成/出错不通知,只有主会话通知' },
@@ -1956,19 +1954,19 @@ window.__ModuleLoader__.load({
                 ' 后台委托未收尾或收尾唤醒的回合不通知(仅完成类)'),
             ]),
             field('宿主通知', [
-              h('label', { className: 'tn-meta tn-switch', title: '通知触发时由宿主进程弹系统级桌面通知(osascript/notify-send/PowerShell toast);浏览器优先:有页面订阅通知通道时由浏览器呈现,宿主不重复弹;浏览器全关(标签页全关)时宿主弹' },
+              h('label', { className: 'tn-meta tn-switch', title: '通知触发时由宿主进程弹 OS 桌面通知,服务器/浏览器全关场景也可达;浏览器优先——浏览器在线时由浏览器呈现,宿主不重复弹' },
                 ...switchToggle({
                   checked: config.hostNotify,
                   onChange: (e) => setConfigField('hostNotify', e.target.checked),
                 }),
                 ' 宿主机弹桌面通知'),
-              h('label', { className: 'tn-meta tn-switch', title: '有页面订阅通知通道时由浏览器呈现,离场时宿主补位桌面通知;与总开关判定一致,任一开启即生效' },
+              h('label', { className: 'tn-meta tn-switch', title: '与宿主通知开关任一开启即生效:浏览器在线时由浏览器呈现,页面离场后宿主补位;窗口边界与网络抖动场景宁重复不漏' },
                 ...switchToggle({
                   checked: config.hostNotifyFallback,
                   onChange: (e) => setConfigField('hostNotifyFallback', e.target.checked),
                 }),
                 ' 仅当无浏览器接收时补位'),
-            ], '由宿主进程直接弹 OS 桌面通知,服务器/浏览器全关场景可达;浏览器优先——浏览器在线时由浏览器呈现,宿主不重复弹,页面离场后宿主补位,边界情况(窗口边界与网络抖动)宁重复不漏。切换即生效,测试页可逐条点火验证。'),
+            ]),
             field('事件分类', h('div', { className: 'tn-pills' },
               CATEGORIES.map((category) => h('span', {
                 className: 'tn-pill' + (config.enabled[category] ? ' tn-pill--on' : ''),
@@ -1976,28 +1974,25 @@ window.__ModuleLoader__.load({
                 title: CATEGORY_LABELS[category] + ':当前' + (config.enabled[category] ? '触发通知,点击停用' : '不触发,点击启用'),
                 onClick: () => void toggleCategory(category, !config.enabled[category]),
               }, CATEGORY_LABELS[category])),
-            ), '亮=触发通知,暗=不触发,点击即存即时生效'),
+            )),
           ) : null,
           activeTab === '偏好' ? h('div', { className: 'tn-card' },
-            h('div', { className: 'tn-card__head' },
-              h('span', { className: 'tn-card__title' }, '本机偏好'),
-              h('span', { className: 'tn-card__sub' }, '仅存当前浏览器(同浏览器各窗口共用),不影响其他浏览器与设备'),
-            ),
+            fieldHead('本机偏好'),
             field('会话高亮', [
-              h('label', { className: 'tn-meta tn-switch', title: '通知触发时脉冲闪烁侧边栏对应会话行(完成绿/出错红/提问蓝等六类各一色),点击该会话行即停止闪烁;仅本机开关,各浏览器独立' },
+              h('label', { className: 'tn-meta tn-switch', title: '通知触发时脉冲闪烁侧边栏对应会话行(完成绿/出错红/提问蓝等六类各一色),一眼定位刚有动静的会话;点击闪烁的行或切走后自然停止;仅存当前浏览器,同浏览器各窗口共用' },
                 ...switchToggle({
                   defaultChecked: readSessionHighlightEnabled(),
                   onChange: (e) => writeSessionHighlightEnabled(e.target.checked),
                 }),
                 ' 通知高亮侧边栏会话行'),
-            ], '通知送达时对应会话行整行脉冲闪烁,一眼定位刚有动静的会话;点击闪烁的行或切走后自然停止。'),
+            ]),
             field('提示音', [
               h('label', { className: 'tn-meta tn-switch', title: '通知声音总开关,失焦时播报;关闭后通知声音静默,已开启的页内提示音会在无声时补位' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_SOUND) !== '0',
                   onChange: (e) => localSet(KEY_SOUND, e.target.checked ? '1' : '0'),
                 }),
-                ' 开启'),
+                ' 通知声音总开关'),
               h('div', { className: 'tn-pills' },
                 CATEGORIES.map((category) => h('span', {
                   className: 'tn-pill' + (soundCategories[category] !== false ? ' tn-pill--on' : ''),
@@ -2008,14 +2003,14 @@ window.__ModuleLoader__.load({
                   onClick: () => toggleSoundCategory(category),
                 }, CATEGORY_LABELS[category])),
               ),
-            ], '点分类单独控制该类事件是否出声:亮=出声,暗=静音;总开关关闭时全部静音。页内提示卡片与会话高亮不受影响;被静音分类的系统弹窗与标题闪烁随之静默;页内提示音有独立的开关、分类与音色映射,不随此处变化。'),
+            ]),
             field('系统弹窗', [
               h('label', { className: 'tn-meta tn-switch', title: '窗口失焦时弹系统级通知;聚焦静默时普通浏览器不弹窗,macOS 桌面版仍可保留无声系统通知(须授权且路由放行);未授权时可降级为标题闪烁' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_SYSTEM) !== '0',
                   onChange: (e) => localSet(KEY_SYSTEM, e.target.checked ? '1' : '0'),
                 }),
-                ' 开启'),
+                ' 失焦弹系统通知'),
               h('span', { className: 'tn-meta' }, '权限:'
                 + (typeof Notification === 'undefined' ? '不可用(非安全上下文)' : (PERMISSION_LABELS[permission] || permission))),
               typeof Notification !== 'undefined' && permission === 'default'
@@ -2028,11 +2023,12 @@ window.__ModuleLoader__.load({
                   defaultChecked: localGet(KEY_TOAST) !== '0',
                   onChange: (e) => localSet(KEY_TOAST, e.target.checked ? '1' : '0'),
                 }),
-                ' 开启'),
-            ], '页面角落浮出卡片提示;聚焦时通知声音静默,提示音的听觉提醒由页内提示音场景独立承担。'),
+                ' 角落浮出卡片提示'),
+            ]),
             field('提示样式', [
               h('select', {
                 className: 'tn-select', 'aria-label': '页内提示样式', value: toastAppearance,
+                title: '标准浮条使用宿主通知配色,主题卡片使用宿主面板配色,均跟随亮暗主题;选择即保存,新通知与二次提醒即时生效',
                 onChange: (e) => {
                   localSet(KEY_TOAST_APPEARANCE, e.target.value)
                   setToastAppearance(readToastAppearance())
@@ -2042,14 +2038,14 @@ window.__ModuleLoader__.load({
                 className: 'tn-btn', disabled: !toast, onClick: previewPageNotification,
                 title: '预览当前页内提示样式,不播放声音',
               }, '预览样式'),
-            ], '标准浮条使用宿主通知配色;主题卡片使用宿主面板配色,两者均跟随亮暗主题。选择即保存,新通知与二次提醒即时生效。'),
+            ]),
             field('页内提示音', [
               h('label', { className: 'tn-meta tn-switch', title: '页内提示音总开关:页内提示弹出且未播放通知声音时补一声提示(聚焦时通知声音静默,靠它保留听觉提醒);与通知声音互斥,同一通知至多一声,音量与本页音量滑块共用' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_PAGE_SOUND) === '1',
                   onChange: (e) => localSet(KEY_PAGE_SOUND, e.target.checked ? '1' : '0'),
                 }),
-                ' 开启'),
+                ' 聚焦时补一声'),
               h('div', { className: 'tn-pills' },
                 CATEGORIES.map((category) => h('span', {
                   className: 'tn-pill' + (pageSoundCategories[category] !== false ? ' tn-pill--on' : ''),
@@ -2060,7 +2056,7 @@ window.__ModuleLoader__.load({
                   onClick: () => togglePageSoundCategory(category),
                 }, CATEGORY_LABELS[category])),
               ),
-            ], '聚焦场景的独立声音:总开关与分类静音在此,音色在音效页的页内提示音映射卡单独指定(未配置的分类沿用通知音效);失焦场景的通知声音不受本行影响。'),
+            ]),
             field('音量', h('input', {
               className: 'tn-range', type: 'range', min: 0, max: 1, step: 0.05,
               title: '通知声音与页内提示音共用,按 5% 步进调节,本机记忆',
@@ -2073,7 +2069,7 @@ window.__ModuleLoader__.load({
                   defaultChecked: localGet(KEY_DND) !== '0',
                   onChange: (e) => localSet(KEY_DND, e.target.checked ? '1' : '0'),
                 }),
-                ' 聚焦静默'),
+                ' 聚焦时静默'),
               h('label', { className: 'tn-meta tn-switch', title: '系统弹窗未授权或不可用(HTTP 非回环地址、曾被拒绝)且声音通道开启时,标签页标题以 ⏳ 前缀闪烁替代弹窗' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_DEGRADE_HINT) !== '0',
@@ -2081,12 +2077,6 @@ window.__ModuleLoader__.load({
                 }),
                 ' 弹窗不可用时以标题闪烁替代'),
             ]),
-          ) : null,
-          activeTab === '偏好' ? h('div', { className: 'tn-card' },
-            h('div', { className: 'tn-card__head' },
-              h('span', { className: 'tn-card__title' }, '会话列表'),
-              h('span', { className: 'tn-card__sub' }, '存宿主配置,各浏览器共用'),
-            ),
             field('运行标记', [
               h('label', { className: 'tn-meta tn-switch', title: FOLD_SWITCH_TITLE },
                 ...switchToggle({
@@ -2094,17 +2084,14 @@ window.__ModuleLoader__.load({
                   onChange: (e) => void toggleFolderRunning(e.target.checked),
                 }),
                 ' 有运行中会话的文件夹显示运行点'),
-            ], '侧边栏按工作区分组时,运行中的文件夹组头显示脉冲运行点并给图标着色,折叠与展开同样生效;变更刷新页面生效。'),
+            ]),
           ) : null,
           activeTab === '音效' ? [
             h('div', { className: 'tn-card' },
-              h('div', { className: 'tn-card__head' },
-                h('span', { className: 'tn-card__title' }, '音效管理'),
-                h('span', { className: 'tn-card__sub' }, 'wav / mp3 / ogg,可多选,单文件上限 2MB'),
-              ),
+              fieldHead('音效管理'),
               field('上传音效', h('input', {
                 type: 'file', multiple: true, accept: AUDIO_EXTS.map((ext) => '.' + ext).join(','), disabled: busy,
-                title: '可一次多选;上传前进待保存列表逐个试听,点保存才落盘;同一文件重复上传自动识别不产生重复;总库上限 10MB',
+                title: 'wav / mp3 / ogg,可一次多选,单文件上限 2MB,总库上限 10MB;上传前进待保存列表逐个试听,点保存才落盘;同一文件重复上传自动识别不产生重复',
                 onChange: (e) => {
                   const files = e.target.files ? Array.from(e.target.files) : []
                   e.target.value = ''
@@ -2164,18 +2151,15 @@ window.__ModuleLoader__.load({
                 ),
             ),
             h('div', { className: 'tn-card' },
-              h('div', { className: 'tn-card__head' },
-                h('span', { className: 'tn-card__title' }, '分类音效映射'),
-                h('span', { className: 'tn-card__sub' }, '每类事件可指定上传音效或内置音,失效自动回落内置默认'),
-              ),
+              fieldHead('分类音效映射'),
               field('作用域', [
-                h('label', { className: 'tn-switch', title: '开启后音效映射仅对本浏览器(域名)生效' },
+                h('label', { className: 'tn-switch', title: '开启:映射改动只保存在本浏览器(按访问域名隔离),本地优先于全局,公司/家里的配置互不影响;关闭:全域名共用 host 全局配置(settings.yaml)' },
                   ...switchToggle({
                     checked: localMode,
                     onChange: (e) => toggleLocalMapping(e.target.checked),
                   })),
                 h('span', { className: 'tn-meta' }, localMode ? '当前域名独立' : '全部域名共用'),
-              ], '开启:映射改动只保存在本浏览器(按访问域名隔离),本地优先于全局,公司/家里的配置互不影响。关闭:全域名共用 host 全局配置(settings.yaml)。'),
+              ]),
               !localMode && Object.keys(localMapping).length > 0
                 ? h('div', { className: 'tn-field' },
                   h('span', { className: 'tn-field__label' }),
@@ -2194,14 +2178,11 @@ window.__ModuleLoader__.load({
               ])),
             ),
             h('div', { className: 'tn-card' },
-              h('div', { className: 'tn-card__head' },
-                h('span', { className: 'tn-card__title' }, '页内提示音映射'),
-                h('span', { className: 'tn-card__sub' }, '聚焦补位音场景,独立于上方通知音效;仅存本机浏览器,未配置的分类沿用通知音效'),
-              ),
+              fieldHead('页内提示音映射'),
               CATEGORIES.map((category) => field(CATEGORY_LABELS[category], [
                 h('select', {
                   className: 'tn-select tn-fill', value: pageMapping[category] || '',
-                  title: '聚焦时页内提示音播放的音效,选择即保存;空为沿用通知音效',
+                  title: '聚焦时页内提示音播放的音效,选择即保存;空为沿用通知音效;仅存本机浏览器',
                   onChange: (e) => setPageMappingCategory(category, e.target.value),
                 }, pageSoundOptions),
                 h('button', { className: 'tn-btn', title: '按页内场景解析播放该分类音效(页内配置覆盖,缺省沿用通知映射)', onClick: () => previewPageCategory(category) }, '试听'),
@@ -2209,10 +2190,7 @@ window.__ModuleLoader__.load({
             ),
           ] : null,
           activeTab === 'IM' ? h('div', { className: 'tn-card' },
-            h('div', { className: 'tn-card__head' },
-              h('span', { className: 'tn-card__title' }, 'IM 投递(dsh-im)'),
-              h('span', { className: 'tn-card__sub' }, '勾选目标即自动保存;支持绑定多个 bot,点 bot 名加载其目录,× 取消注册'),
-            ),
+            fieldHead('IM 投递(dsh-im)'),
             field('IM 开关', [
               h('label', { className: 'tn-meta tn-switch', title: '关闭后不再向已配目标投递 IM 通知,目标绑定保留;再次开启即恢复推送' },
                 ...switchToggle({
@@ -2220,7 +2198,7 @@ window.__ModuleLoader__.load({
                   onChange: (e) => toggleImEnabled(e.target.checked),
                 }),
                 ' 启用 IM 推送'),
-            ], '关闭时通知不推送 IM,已勾选的目标与 bot 绑定原样保留,无需移除目标'),
+            ]),
             field('Bot ID', [
               h('input', {
                 className: 'tn-input tn-fill', type: 'text',
@@ -2281,10 +2259,7 @@ window.__ModuleLoader__.load({
                 ),
           ) : null,
           activeTab === '测试' ? h('div', { className: 'tn-card' },
-            h('div', { className: 'tn-card__head' },
-              h('span', { className: 'tn-card__title' }, '测试'),
-              h('span', { className: 'tn-card__sub' }, '各通道逐一点火,回执即真实结果'),
-            ),
+            fieldHead('测试'),
             h('div', { className: 'tn-btngroup' },
               h('button', {
                 className: 'tn-btn',

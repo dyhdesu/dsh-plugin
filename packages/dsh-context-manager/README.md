@@ -65,8 +65,8 @@
 
 ## 依赖与门控
 
-- client 半区宿主服务经 inject 声明(`slots`/`sessions`/`workspaces`/`remote`/`remote.session` 点分声明),namespace 未就绪整体保持未激活(干净禁用);host 半区 inject 为 `webServer`/`agents`/`sessionQuery`/`sessionPersistence`
-- 公共依赖 `@mzzsfy/dsh-change-bus` 可选消费(模块缺失通知通道置空)
+- client 半区宿主服务经 inject 声明(`slots`/`sessions`/`workspaces`/`uiWorkspace`/`remote`/`remote.session` 点分声明),namespace 未就绪整体保持未激活(干净禁用);host 半区 inject 为 `webServer`/`agents`/`sessionQuery`/`sessionPersistence`
+- 公共依赖 `@mzzsfy/dsh-common-tools` 可选消费(toast 通知通道,模块缺失即置空)
 - 样式注入带 `data-plugin` 标记,开关为 `cx-switch` 形态(状态选择器锚定 `input[type="checkbox"]`)
 
 ## API(host 半区)
@@ -84,8 +84,6 @@
 | `/api/context/git-clone` | POST | 克隆仓库(url/parent/name/shallow,单飞行,返回 `{path}`) |
 | `/api/context/clone-enabled` | GET/POST | 克隆仓库按钮启停 |
 
-设计文档:仓库根 `docs/上下文管理插件设计.md`
-
 ## dsh 版本兼容
 
-按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。兼容面以窗口实测为准,不逐版本承诺。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md` 与本包 `兼容性测试.md`。
+按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。兼容面以窗口实测为准,不逐版本承诺。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md`(本地维护,不入库)与本包 `兼容性测试.md`。

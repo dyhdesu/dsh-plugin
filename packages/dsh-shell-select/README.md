@@ -40,20 +40,17 @@ Windows 宿主 shell 链接管:接管根组合中的官方 `pwsh` 工具与执�
 ```yaml
 shell-select:
   shells:
-    - id: pwsh
-      name: PowerShell
-      kind: pwsh        # pwsh | bash | cmd | wsl
-      path: ""          # 留空自动探测;bash 形探测序含 msys2 锚位(见下)
-      args: []          # 留空用形态默认;自定义模板以 {command} 为命令占位
-      login: false      # bash 形 true 时 -lc 登录壳(-lc 只取 /usr/bin;/mingw64/bin 需另配 env MSYSTEM=MINGW64)
-      distro: ""        # wsl 形发行版(如 Ubuntu-22.04),留空用 wsl 默认;args 模板条目忽略
-      env: {}           # 条目级环境变量,如 { MSYSTEM: MINGW64 };wsl 形键自动经 WSLENV 透传
+    - id: pwsh        # id 亦作显示名
+      kind: pwsh      # pwsh | bash | cmd | wsl
+      path: ""        # 留空自动探测;bash 形探测序含 msys2 锚位(见下)
+      args: []        # 留空用形态默认;自定义模板以 {command} 为命令占位
+      login: false    # bash 形 true 时 -lc 登录壳(-lc 只取 /usr/bin;/mingw64/bin 需另配 env MSYSTEM=MINGW64)
+      distro: ""      # wsl 形发行版(如 Ubuntu-22.04),留空用 wsl 默认;args 模板条目忽略
+      env: {}         # 条目级环境变量,如 { MSYSTEM: MINGW64 };wsl 形键自动经 WSLENV 透传
     - id: git-bash
-      name: Git Bash
       kind: bash
       path: ""
     - id: cmd
-      name: CMD
       kind: cmd
       path: ""
   default: pwsh
@@ -98,4 +95,4 @@ env 优先级(同键高右):内置覆盖集(NO_COLOR/PAGER/GIT_PAGER)< 条目 `e
 
 ## dsh 版本兼容
 
-按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。本包声明 `dsh.hostMin = "0.1.7-rc.1"`:低于该代际的宿主 API 面未验证,compat 装载层自动排除。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md` 与本包 `兼容性测试.md`。
+按仓库动态窗口验证(scripts/compat/window.mjs),不预置任何固定版本槽:主测 = 渠道 dist-tag 最新 rc,完全适配口径;基线 = npm latest,不崩溃底线口径;主测与基线同版时收敛单槽。本包声明 `dsh.hostMin = "0.1.7-rc.1"`:低于该代际的宿主 API 面未验证,compat 装载层自动排除。逐轮实测结论见 `docs/兼容性测试/逐包测试进度.md`(本地维护,不入库)与本包 `兼容性测试.md`。

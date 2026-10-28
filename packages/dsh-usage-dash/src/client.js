@@ -1921,11 +1921,11 @@ if (typeof window !== 'undefined' && window.__ModuleLoader__) {
     }
 
     const STYLE_CSS = `
+/* 图表区分色:主色与热力图梯度挂业务蓝派生(brand-primary 在宿主新版主题为单色黑白,不可作数据色);
+   speed/ttft 用 success/warn 语义槽,亮暗随宿主别名自动适配 */
 .ud-panel{display:flex;flex-direction:column;gap:12px;font-size:13px;color:var(--dsw-alias-label-primary);
---ud-chart-1:color-mix(in srgb,#0576ff 70%,white);--ud-chart-2:color-mix(in srgb,#2f6f37 70%,white);--ud-chart-3:color-mix(in srgb,#c46212 70%,white);--ud-chart-4:color-mix(in srgb,#975bf1 70%,white);--ud-chart-5:color-mix(in srgb,#d34591 70%,white);--ud-chart-other:color-mix(in srgb,#576270 70%,white);
---dsw-heat-0:#ebedf0;--dsw-heat-1:#dbe3ff;--dsw-heat-2:#b7c5ff;--dsw-heat-3:#8ea4ff;--dsw-heat-4:#6884ff;--dsw-heat-5:#4d6bfe;--ud-trend-line:#0576ff;--ud-trend-speed:#0ca678;--ud-trend-ttft:#e8590c}
-body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,white);--ud-chart-2:color-mix(in srgb,#2f6f37 65%,white);--ud-chart-3:color-mix(in srgb,#c46212 65%,white);--ud-chart-4:color-mix(in srgb,#975bf1 65%,white);--ud-chart-5:color-mix(in srgb,#d34591 65%,white);--ud-chart-other:color-mix(in srgb,#576270 65%,white);
---dsw-heat-0:#21262d;--dsw-heat-1:#2f4bd0;--dsw-heat-2:#4d6bfe;--dsw-heat-3:#6e8bff;--dsw-heat-4:#93aaff;--dsw-heat-5:#c4d0ff;--ud-trend-line:#4d6bfe;--ud-trend-speed:#2fbf8f;--ud-trend-ttft:#ffa94d}
+--ud-chart-1:var(--dsw-alias-state-business-primary);--ud-chart-2:var(--dsw-alias-state-success-primary);--ud-chart-3:var(--dsw-alias-state-warn-primary);--ud-chart-4:#975bf1;--ud-chart-5:#d34591;--ud-chart-other:var(--dsw-alias-label-tertiary);
+--ud-heat-0:color-mix(in srgb, var(--dsw-alias-label-tertiary) 12%, transparent);--ud-heat-1:color-mix(in srgb, var(--dsw-alias-state-business-primary) 18%, transparent);--ud-heat-2:color-mix(in srgb, var(--dsw-alias-state-business-primary) 36%, transparent);--ud-heat-3:color-mix(in srgb, var(--dsw-alias-state-business-primary) 54%, transparent);--ud-heat-4:color-mix(in srgb, var(--dsw-alias-state-business-primary) 74%, transparent);--ud-heat-5:var(--dsw-alias-state-business-primary);--ud-trend-line:var(--dsw-alias-state-business-primary);--ud-trend-speed:var(--dsw-alias-state-success-primary);--ud-trend-ttft:var(--dsw-alias-state-warn-primary)}
 .ud-toolbar{display:flex;align-items:flex-start;gap:8px}
 .ud-toolbar-main{display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex:1 1 auto;min-width:0}
 .ud-group{display:flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1)}
@@ -1996,12 +1996,12 @@ body[data-ds-dark-theme] .ud-panel{--ud-chart-1:color-mix(in srgb,#0576ff 65%,wh
 .ud-heat-wrap{width:100%;min-width:0;overflow:hidden}
 .ud-heat{display:block}
 .ud-heat-cell{stroke:none}
-.ud-heat-l0{fill:var(--dsw-heat-0);background:var(--dsw-heat-0)}
-.ud-heat-l1{fill:var(--dsw-heat-1);background:var(--dsw-heat-1)}
-.ud-heat-l2{fill:var(--dsw-heat-2);background:var(--dsw-heat-2)}
-.ud-heat-l3{fill:var(--dsw-heat-3);background:var(--dsw-heat-3)}
-.ud-heat-l4{fill:var(--dsw-heat-4);background:var(--dsw-heat-4)}
-.ud-heat-l5{fill:var(--dsw-heat-5);background:var(--dsw-heat-5)}
+.ud-heat-l0{fill:var(--ud-heat-0);background:var(--ud-heat-0)}
+.ud-heat-l1{fill:var(--ud-heat-1);background:var(--ud-heat-1)}
+.ud-heat-l2{fill:var(--ud-heat-2);background:var(--ud-heat-2)}
+.ud-heat-l3{fill:var(--ud-heat-3);background:var(--ud-heat-3)}
+.ud-heat-l4{fill:var(--ud-heat-4);background:var(--ud-heat-4)}
+.ud-heat-l5{fill:var(--ud-heat-5);background:var(--ud-heat-5)}
 .ud-heat-legend{display:inline-flex;align-items:center;gap:${HEAT_GAP}px;margin-left:auto;flex:none;font-size:11px;color:var(--dsw-alias-label-secondary)}
 .ud-heat-legend i{display:inline-block;width:${HEAT_BASE}px;height:${HEAT_BASE}px;border-radius:${HEAT_RX}px;flex:none}
 .ud-tip{position:fixed;z-index:${TIP_Z_INDEX};visibility:hidden;pointer-events:none;white-space:nowrap;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-overlay);box-shadow:0 1px 2px var(--dsw-alias-bg-mask-2),0 6px 20px var(--dsw-alias-bg-mask-2);color:var(--dsw-alias-label-primary);font-size:13px;padding:10px 12px;font-variant-numeric:tabular-nums}

@@ -8,7 +8,7 @@ import { buildUnit, buildWebhookPayload } from '../src/core.mjs'
 
 const source = readFileSync(new URL('../src/client.js', import.meta.url), 'utf8')
 const host = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
-const navigation = source.slice(source.indexOf('let sessionNavigator = null'), source.indexOf('// ---- 审批/提问超时二次提醒'))
+const navigation = source.slice(source.indexOf('const sessionNavigators = new Map()'), source.indexOf('// ---- 审批/提问超时二次提醒'))
 const system = source.slice(source.indexOf('function notifySystem('), source.indexOf('// ---- 投影快照与认领'))
 function fixture({ protocol = 'dsh-app:', platform = 'darwin', focusThrows = false, openThrows = false, wakeFails = false } = {}) {
   const opened = [], requests = [], messages = [], notifications = []
@@ -18,7 +18,7 @@ function fixture({ protocol = 'dsh-app:', platform = 'darwin', focusThrows = fal
   const api = async (...args) => { requests.push(args); if (wakeFails) throw new Error('wake'); return { ok: true } }
   const toast = (message) => messages.push(message)
   class Notification { constructor(title, options) { Object.assign(this, { title, options, closed: false }); notifications.push(this) } close() { this.closed = true } }
-  const runtime = new Function('window', 'document', 'api', 'toast', 'Notification', 'TOAST_MS', navigation + system + '\nreturn { activateSessionFromUnit, notifySystem, bind(value) { sessionNavigator = value } }')(window, document, api, toast, Notification, 6000)
+  const runtime = new Function('window', 'document', 'api', 'toast', 'Notification', 'TOAST_MS', navigation + system + '\nreturn { activateSessionFromUnit, notifySystem, bind(value) { sessionNavigators.clear(); if (value) sessionNavigators.set(Symbol(), value) } }')(window, document, api, toast, Notification, 6000)
   runtime.bind({ openSession(id) { if (openThrows) throw new Error('open'); opened.push(id) } })
   return { ...runtime, opened, requests, messages, notifications, focuses: () => focuses }
 }
@@ -102,7 +102,7 @@ test('导航服务经注入生命周期绑定并卸载，不影响其他通知�
   let release
   const navigator = { openSession() {} }
   const ctx = { inject(names, fn) { assert.deepEqual(names, ['uiWorkspace']); fn({ get: () => navigator, effect(fn) { release = fn() } }) } }
-  const run = new Function('ctx', 'let sessionNavigator = null;\n' + source.slice(start, end) + '\nreturn () => sessionNavigator')
+  const run = new Function('ctx', 'const sessionNavigators = new Map();\n' + source.slice(start, end) + '\nreturn () => [...sessionNavigators.values()].at(-1) ?? null')
   const current = run(ctx)
   assert.equal(current(), navigator)
   release()

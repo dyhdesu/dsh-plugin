@@ -29,20 +29,27 @@ window.__ModuleLoader__.load({
     // 层级假设的显式化:承诺"高于设置全屏层"绑定此值,宿主层级调整时回归核对
     const TOAST_Z_INDEX = 1100
 
-    // 令牌 fallback:宿主 dsh 升级更名 --dsw-* 变量时降级为可用默认形态,
-    // 不静默失效为透明底/不可读字
+    // 每种样式使用成对主题色,状态仅强调边框,避免状态底色与文字对比失效。
     const CSS = [
       '.dsh-toast-stack { position:fixed; left:50%; top:16px; transform:translateX(-50%); z-index:' + TOAST_Z_INDEX + ';',
-      '  display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; }',
-      '.dsh-toast { pointer-events:auto; background:var(--dsw-alias-toast-bg, rgba(32,33,36,.92)); color:var(--dsw-alias-label-primary-inverted, #fff);',
-      '  font:var(--dsw-font-xs-13, 13px/1.5 system-ui, sans-serif); padding:8px 14px; border-radius:10px; box-shadow:var(--dsw-shadow-lv2, 0 2px 8px rgba(0,0,0,.25));',
-      '  animation:dsh-toast-in 0.18s ease-out; max-width:520px; max-height:60vh; overflow:auto; overflow-wrap:anywhere; display:flex; align-items:safe center; gap:10px; }',
-      '.dsh-toast--ok { background:var(--dsw-alias-state-success-primary, #1a7f37); color:var(--dsw-alias-label-primary-inverted, #fff); }',
-      '.dsh-toast--error { background:var(--dsw-alias-state-error-primary, #d93025); color:#fff; }',
+      '  display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none;',
+      '  --dct-bg:var(--dsw-alias-toast-bg); --dct-label:var(--dsw-alias-toast-label);',
+      '  --dct-panel-bg:var(--dsw-alias-bg-layer-1); --dct-text:var(--dsw-alias-label-primary);',
+      '  --dct-border:var(--dsw-alias-border-l2);',
+      '  --dct-ok:var(--dsw-alias-state-success-primary); --dct-danger:var(--dsw-alias-state-error-primary);',
+      '  --dct-radius-md:8px; --dct-shadow:var(--dsw-shadow-lv3); }',
+      '.dsh-toast { pointer-events:auto; background:var(--dct-bg); color:var(--dct-label);',
+      '  font-family:inherit; font-size:13px; line-height:1.5; padding:8px 12px; border-radius:var(--dct-radius-md); box-shadow:var(--dct-shadow);',
+      '  border:1px solid transparent; border-inline-start-width:4px; box-sizing:border-box;',
+      '  animation:dsh-toast-in 0.18s ease-out; max-width:min(520px, calc(100vw - 32px)); max-height:60vh; overflow:auto; overflow-wrap:anywhere; display:flex; align-items:safe center; gap:8px; }',
+      '.dsh-toast--panel { background:var(--dct-panel-bg); color:var(--dct-text); border-color:var(--dct-border); }',
+      '.dsh-toast--ok { border-inline-start-color:var(--dct-ok); }',
+      '.dsh-toast--error { border-inline-start-color:var(--dct-danger); }',
       '.dsh-toast--click { cursor:pointer; }',
+      '.dsh-toast__text { white-space:pre-line; }',
       '.dsh-toast__close { border:0; background:transparent; cursor:pointer; color:inherit;',
-      '  font:var(--dsw-font-xs-strong-13, 13px system-ui, sans-serif); padding:0 2px; opacity:.8; }',
-      '.dsh-toast__close:hover { opacity:1; }',
+      '  font-family:inherit; font-size:13px; font-weight:500; line-height:1.5; padding:0 2px; }',
+      '.dsh-toast__close:focus-visible { outline:2px solid currentColor; outline-offset:2px; }',
       '@keyframes dsh-toast-in { from { transform:translateY(-8px); opacity:0; } to { transform:translateY(0); opacity:1; } }',
       '@media (prefers-reduced-motion: reduce) { .dsh-toast { animation:none; } }',
     ].join('\n')
@@ -96,7 +103,8 @@ window.__ModuleLoader__.load({
       if (typeof text !== 'string' || text.trim() === '') return null
       const sticky = Boolean(opts && opts.sticky)
       const onClick = typeof (opts && opts.onClick) === 'function' ? opts.onClick : undefined
-      const entry = { id: ++seq, text, kind: normalizeKind(opts && opts.kind), sticky, onClick, timer: undefined }
+      const appearance = opts?.appearance === 'panel' ? 'panel' : 'toast'
+      const entry = { id: ++seq, text, kind: normalizeKind(opts && opts.kind), appearance, sticky, onClick, timer: undefined }
       const merged = items.concat(entry)
       if (merged.length > TOAST_MAX) {
         for (const dropped of merged.slice(0, merged.length - TOAST_MAX)) clearTimer(dropped)
@@ -194,11 +202,11 @@ window.__ModuleLoader__.load({
         ? undefined
         : () => { dismiss(item.id); item.onClick() }
       return h('div', {
-        className: 'dsh-toast dsh-toast--' + item.kind + (activate !== undefined ? ' dsh-toast--click' : ''),
+        className: 'dsh-toast dsh-toast--' + item.kind + ' dsh-toast--' + item.appearance + (activate !== undefined ? ' dsh-toast--click' : ''),
         role: 'alert',
         onClick: activate,
       },
-        h('span', null, item.text),
+        h('span', { className: 'dsh-toast__text' }, item.text),
         item.sticky
           ? h('button', {
               className: 'dsh-toast__close',

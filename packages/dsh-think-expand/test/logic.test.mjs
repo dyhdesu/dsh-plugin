@@ -21,7 +21,7 @@ function clientLogic() {
   const factory = new Function(
     '"use strict";'
       + section
-      + '; return { STATE_RUNNING, STATE_OK, createRegistry, plan, planFinal, registerCurrent, capMap, capSet, needsReattach, SEEN_MAP_CAP, EXPANDED_CAP, prefixOf, matchMark, findSeenKey, isCurrent, putSeen, findRow, PIN_THRESHOLD_PX, isPinned, shouldPinRestore };',
+      + '; return { STATE_RUNNING, STATE_OK, createRegistry, plan, planFinal, registerCurrent, capMap, capSet, needsReattach, SEEN_MAP_CAP, EXPANDED_CAP, prefixOf, matchMark, findSeenKey, isCurrent, putSeen, findRow, PIN_THRESHOLD_PX, isPinned, shouldPinRestore, createToolsRegistry, planTools };',
   )
   return factory()
 }
@@ -37,7 +37,7 @@ const collapseOf = (result, index) =>
   result.actions.filter((a) => a.index === index && a.kind === 'collapse').length
 
 function defineScenarios(prefix, L) {
-  const { createRegistry, plan, planFinal, registerCurrent, STATE_RUNNING, STATE_OK, capMap, needsReattach, SEEN_MAP_CAP, PIN_THRESHOLD_PX, isPinned, shouldPinRestore } = L
+  const { createRegistry, plan, planFinal, registerCurrent, STATE_RUNNING, STATE_OK, capMap, needsReattach, SEEN_MAP_CAP, PIN_THRESHOLD_PX, isPinned, shouldPinRestore, createToolsRegistry, planTools, putSeen } = L
 
   // 滚动度量构造:{ scrollHeight, scrollTop, clientHeight }
   const metrics = (scrollHeight, scrollTop, clientHeight) => ({ scrollHeight, scrollTop, clientHeight })
@@ -165,9 +165,61 @@ function defineScenarios(prefix, L) {
     assert.equal(result.actions.length, 0)
   })
 
-  test(prefix + '历史会话常规扫描不干预', () => {
+  test(prefix + '历史会话常规扫描仅开最后一条(宿主流式态不再标注 running 后的兜底)', () => {
     const reg = createRegistry()
     const result = plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    assert.equal(expandOf(result, 0), 0)
+    assert.equal(expandOf(result, 1), 1)
+    assert.equal(result.actions.length, 1)
+  })
+
+  test(prefix + '尾部兜底:已读命中不开最后一条', () => {
+    const reg = createRegistry()
+    putSeen(reg.read, undefined, 'B')
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:手动命中不开最后一条', () => {
+    const reg = createRegistry()
+    putSeen(reg.manual, undefined, 'B')
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:开最后一条后登记 current,幂等无动作', () => {
+    const reg = createRegistry()
+    plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B', true, true, true)])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:新回合行出现收起旧 current 开新行', () => {
+    const reg = createRegistry()
+    plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    const result = plan(reg, [row(OK, 'A'), row(OK, 'B', true, true, true), row(OK, 'C')])
+    assert.equal(collapseOf(result, 1), 1)
+    assert.equal(expandOf(result, 2), 1)
+  })
+
+  test(prefix + '尾部兜底:空正文行不作为目标', () => {
+    const reg = createRegistry()
+    const result = plan(reg, [row(OK, '')])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '尾部兜底:存在手动展开行不收手动行,且不再开目标(单条约束让位手动)', () => {
+    const reg = createRegistry()
+    plan(reg, [row(OK, 'A'), row(OK, 'B')])
+    const result = plan(reg, [row(OK, 'A', true, true, false, 7), row(OK, 'B', true, true, true)])
+    const expands = expandOf(result, 0) + expandOf(result, 1)
+    assert.equal(expands, 0)
+    assert.equal(collapseOf(result, 1), 1)
+  })
+
+  test(prefix + '尾部兜底:识别失败行不作目标', () => {
+    const reg = createRegistry()
+    const result = plan(reg, [row(OK, 'B', false, false)])
     assert.equal(result.actions.length, 0)
   })
 
@@ -335,10 +387,111 @@ function defineScenarios(prefix, L) {
     assert.equal(expandOf(result, 1), 1)
   })
 
-  test(prefix + '批量 running 降级不干预', () => {
+  test(prefix + '批量 running:仅思考模式降级不干预', () => {
     const reg = createRegistry()
     const result = plan(reg, [row(RUNNING, 'A'), row(RUNNING, 'B')])
     assert.equal(result.actions.length, 0)
+  })
+
+  // ---- 工具机(planTools):与思考机独立的第二状态机(展开全部消息模式) ----
+
+  const toolRow = (expanded = false, expandable = true, plugged = false, uid = undefined, bodyText = '内容') =>
+    ({ uid, expandable, expanded, plugged, bodyText })
+
+  test(prefix + '工具机:最后一个可展开行产生展开动作', () => {
+    const reg = createToolsRegistry()
+    const result = planTools(reg, [toolRow(), toolRow(true), toolRow()])
+    assert.equal(expandOf(result, 2), 1)
+    assert.equal(result.actions.length, 1)
+  })
+
+  test(prefix + '工具机:插件展开行被收起视为已读不再展开', () => {
+    const reg = createToolsRegistry()
+    // 首扫展开目标行(current 登记)
+    planTools(reg, [toolRow(false, true, false, 7)])
+    // 用户收起(expanded=false+plugged 闩锁仍在,行仍可展开)
+    const after = planTools(reg, [toolRow(false, true, true, 7)])
+    assert.equal(after.actions.length, 0)
+    assert.equal(reg.read.size, 1)
+    // 已读行不再展开
+    const again = planTools(reg, [toolRow(false, true, false, 7)])
+    assert.equal(again.actions.length, 0)
+  })
+
+  test(prefix + '工具机:手动展开行为 manual,插件接管不收', () => {
+    const reg = createToolsRegistry()
+    // 前置:插件已展开过行5(current 在场),手动识别激活
+    planTools(reg, [toolRow(false, true, false, 5)])
+    const result = planTools(reg, [
+      toolRow(true, true, false, 3),
+      toolRow(false, true, true, 5),
+    ])
+    assert.equal(reg.manual.size, 1)
+    assert.equal(collapseOf(result, 0), 0)
+  })
+
+  test(prefix + '工具机:插件展开旧行被新目标行接管收起', () => {
+    const reg = createToolsRegistry()
+    const first = planTools(reg, [toolRow(false, true, false, 1)])
+    assert.equal(expandOf(first, 0), 1)
+    // 插件展开落定(闩锁),新目标行出现
+    const second = planTools(reg, [toolRow(true, true, true, 1), toolRow(false, true, false, 2)])
+    assert.equal(collapseOf(second, 0), 1)
+    assert.equal(expandOf(second, 1), 1)
+  })
+
+  test(prefix + '工具机:不可展开行(如 preparing)跳过,目标取上一可展开行', () => {
+    const reg = createToolsRegistry()
+    const result = planTools(reg, [toolRow(), toolRow(false, false)])
+    assert.equal(expandOf(result, 0), 1)
+  })
+
+  test(prefix + '工具机:无可展开行不干预', () => {
+    const reg = createToolsRegistry()
+    const result = planTools(reg, [toolRow(false, false), toolRow(false, false)])
+    assert.equal(result.actions.length, 0)
+  })
+
+  test(prefix + '工具机:目标行展开后宿主改写正文,uid 身份仍命中,不误判手动不误收', () => {
+    // Given 工具行已由插件展开并登记 current(正文为登记时快照)
+    const reg = createToolsRegistry()
+    planTools(reg, [toolRow(false, true, false, 7, 'A'.repeat(31))])
+    assert.notEqual(reg.current, null)
+    // When 宿主改写正文为等长无关文本(非前缀关系)且行保持展开
+    const rewritten = planTools(reg, [toolRow(true, true, true, 7, 'B'.repeat(36))])
+    // Then 无任何动作:不误判手动、不接管收起自己、current 保持
+    assert.equal(rewritten.actions.length, 0)
+    assert.equal(reg.manual.size, 0)
+    assert.notEqual(reg.current, null)
+  })
+
+  test(prefix + '工具机:正文改写后的收起仍走已读登记(uid 兜底)', () => {
+    const reg = createToolsRegistry()
+    planTools(reg, [toolRow(false, true, false, 7, 'A'.repeat(31))])
+    // When 宿主改写正文后行被收起
+    const result = planTools(reg, [toolRow(false, true, false, 7, 'B'.repeat(36))])
+    // Then 不重展开,已读落盘(uid 限定),current 释放
+    assert.equal(result.actions.filter((a) => a.kind === 'expand').length, 0)
+    assert.notEqual(reg.read.size, 0)
+    assert.equal(reg.current, null)
+  })
+
+  test(prefix + '工具机:suppressManual 首扫既存展开行视为中性', () => {
+    const reg = createToolsRegistry()
+    const result = planTools(reg, [toolRow(true, true, false, 9)], { suppressManual: true })
+    assert.equal(result.actions.length, 0)
+    assert.equal(reg.manual.size, 0)
+  })
+
+  test(prefix + '工具机:与思考机状态互不串扰(独立 registry)', () => {
+    const thinkReg = createRegistry()
+    const toolReg = createToolsRegistry()
+    plan(thinkReg, [row(RUNNING, '思考A')])
+    planTools(toolReg, [toolRow(false, true, false, 5)])
+    assert.notEqual(thinkReg.current, null)
+    assert.notEqual(toolReg.current, null)
+    assert.equal(thinkReg.current.uid, undefined)
+    assert.equal(toolReg.current.uid, 5)
   })
 
   test(prefix + '识别失败不干预', () => {
@@ -417,7 +570,7 @@ test('LOGIC 段与 logic.mjs 逐函数源码一致(归一化注释与空白,含�
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/\/\/[^\n]*/g, '')
     .replace(/\s+/g, '')
-  for (const name of ['plan', 'planFinal', 'createRegistry', 'capMap', 'needsReattach', 'registerCurrent', 'isPinned', 'shouldPinRestore']) {
+  for (const name of ['plan', 'planFinal', 'createRegistry', 'capMap', 'needsReattach', 'registerCurrent', 'isPinned', 'shouldPinRestore', 'createToolsRegistry', 'planTools']) {
     assert.equal(
       normalize(client[name].toString()),
       normalize(logic[name].toString()),
@@ -431,7 +584,7 @@ test('LOGIC 段与 logic.mjs 逐函数源码一致(归一化注释与空白,含�
       'LOGIC 段内部助手与 logic.mjs 漂移: ' + name,
     )
   }
-  for (const name of ['STATE_RUNNING', 'STATE_OK', 'SEEN_MAP_CAP', 'PIN_THRESHOLD_PX']) {
+  for (const name of ['STATE_RUNNING', 'STATE_OK', 'SEEN_MAP_CAP', 'PIN_THRESHOLD_PX', 'EXPANDED_CAP']) {
     assert.equal(client[name], logic[name], '常量漂移: ' + name)
   }
 })

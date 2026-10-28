@@ -297,6 +297,7 @@ export const CHANNELS = ['sound', 'system', 'toast', 'blink', 'webhook', 'im', '
 // 系统弹窗须授权,想弹而未授权时降级标题闪烁(调用方再按降级提示开关呈现)。
 // idleMs 为距上次用户行动的时长,满阈值视为离开,等效未聚焦。
 // foregroundSystem仅豁免system的聚焦静默，不绕过授权/总开关/事件路由，也不解除声音静默。
+// systemSilent 将此时仍生效的 quiet 意图传到原生通知,不从 sound 开关/分类/路由反推。
 // pageSound 为页内提示音:页内提示弹出且通知声音未播时补一声(聚焦场景的听觉提醒),
 // 不受聚焦静默压制,受页内总开关、页内分类配置(pageSoundCategories,独立于提示音分类)
 // 与通知声音互斥约束(同一通知至多一声)。
@@ -309,10 +310,12 @@ export function chooseChannels({ hasFocus, permission, focusQuiet = true, toastE
   const pageCategoryMuted = pageSoundCategories != null && category != null && pageSoundCategories[category] === false
   const routed = (channel) => routes === null || routes.indexOf(channel) >= 0
   const sound = !quiet && soundEnabled && !categoryMuted && routed('sound')
+  const system = (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system')
   return {
     toast: toastEnabled && routed('toast'),
     sound,
-    system: (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system'),
+    system,
+    systemSilent: system && quiet && foregroundSystem,
     blink: !quiet && systemEnabled && permission !== 'granted' && routed('blink'),
     pageSound: pageSoundEnabled && toastEnabled && !pageCategoryMuted && !sound && routed('toast'),
   }

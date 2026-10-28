@@ -285,10 +285,12 @@ window.__ModuleLoader__.load({
       const pageCategoryMuted = pageSoundCategories != null && category != null && pageSoundCategories[category] === false
       const routed = (channel) => routes == null || routes.indexOf(channel) >= 0
       const sound = !quiet && soundEnabled && !categoryMuted && routed('sound')
+      const system = (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system')
       return {
         toast: toastEnabled && routed('toast'),
         sound,
-        system: (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system'),
+        system,
+        systemSilent: system && quiet && foregroundSystem,
         blink: !quiet && systemEnabled && permission !== 'granted' && routed('blink'),
         pageSound: localGet(KEY_PAGE_SOUND) === '1' && toastEnabled && !pageCategoryMuted && !sound && routed('toast'),
       }
@@ -390,24 +392,41 @@ window.__ModuleLoader__.load({
     // ---- 声音:Web Audio,autoplay 解锁依赖首次用户交互,解锁前静默 ----
 
     let audioCtx = null
+    let audioLease = null
     const decodedCache = new Map()
-
+    const ACTION_EVENTS = ['pointerdown', 'keydown', 'mousemove', 'wheel']
+    const assertAudioActive = (ctx2 = audioCtx) => {
+      if (!audioLease?.active || ctx2 === null || ctx2 !== audioCtx) throw new Error('通知音频已停用')
+    }
     function ensureAudioCtx() {
+      if (!audioLease?.active) throw new Error('通知音频已停用')
       if (audioCtx === null) audioCtx = new (window.AudioContext || window.webkitAudioContext)()
-      // resume 仅触发不等待(通知链路 fire-and-forget);手动播放由 ensureRunnableCtx 等待并给可见反馈
       if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
       return audioCtx
     }
-    // 首次交互解锁:解锁前静默不视为故障
-    window.addEventListener('pointerdown', () => { ensureAudioCtx() }, { once: true })
-
-    // 用户行动时刻:空闲满阈值视为离开,聚焦静默不再适用;
-    // handler 挂 window 共享并按标记幂等注册,防模块重载后监听累积
-    if (!window.__tnActionHandler) {
+    function startAudio() {
+      const lease = { active: true }
+      audioLease = lease
+      const unlockAudio = () => {
+        if (audioLease !== lease || !lease.active) return
+        try { ensureAudioCtx() } catch { /* 缺少音频能力不影响其余通道 */ }
+      }
+      const recordAction = () => { if (lease.active) window.__tnLastActionAt = Date.now() }
       window.__tnLastActionAt = Date.now()
-      window.__tnActionHandler = () => { window.__tnLastActionAt = Date.now() }
-      for (const type of ['pointerdown', 'keydown', 'mousemove', 'wheel']) {
-        window.addEventListener(type, window.__tnActionHandler)
+      window.__tnActionHandler = recordAction
+      window.addEventListener('pointerdown', unlockAudio, { once: true })
+      for (const type of ACTION_EVENTS) window.addEventListener(type, recordAction)
+      return () => {
+        lease.active = false
+        window.removeEventListener('pointerdown', unlockAudio)
+        for (const type of ACTION_EVENTS) window.removeEventListener(type, recordAction)
+        if (window.__tnActionHandler === recordAction) delete window.__tnActionHandler
+        if (audioLease !== lease) return
+        audioLease = null
+        const closing = audioCtx
+        audioCtx = null
+        decodedCache.clear()
+        try { Promise.resolve(closing?.close()).catch(() => {}) } catch { /* 资源已失效也保持退役 */ }
       }
     }
     const lastActionAt = () => window.__tnLastActionAt ?? Date.now()
@@ -415,6 +434,7 @@ window.__ModuleLoader__.load({
     function volume() { return parseVolume(localGet(KEY_VOLUME)) }
 
     function playTone(ctx2, spec) {
+      assertAudioActive(ctx2)
       const master = ctx2.createGain()
       master.gain.value = volume()
       master.connect(ctx2.destination)
@@ -435,6 +455,7 @@ window.__ModuleLoader__.load({
     }
 
     function playBuffer(ctx2, buffer) {
+      assertAudioActive(ctx2)
       const source = ctx2.createBufferSource()
       const master = ctx2.createGain()
       master.gain.value = volume()
@@ -455,7 +476,10 @@ window.__ModuleLoader__.load({
       if (buffer === undefined) {
         const response = await fetch('/api/turn-notify/sound?id=' + encodeURIComponent(sound.id))
         if (!response.ok) throw new Error('读取音效失败: HTTP ' + response.status)
-        buffer = await ctx2.decodeAudioData(await response.arrayBuffer())
+        const raw = await response.arrayBuffer()
+        assertAudioActive(ctx2)
+        buffer = await ctx2.decodeAudioData(raw)
+        assertAudioActive(ctx2)
         decodedCache.set(sound.id, buffer)
       }
       playBuffer(ctx2, buffer)
@@ -468,13 +492,15 @@ window.__ModuleLoader__.load({
     async function ensureRunnableCtx() {
       const ctx2 = ensureAudioCtx()
       if (ctx2.state === 'suspended') {
+        let timer
         try {
           await Promise.race([
             ctx2.resume(),
-            new Promise((resolve) => { setTimeout(resolve, AUDIO_RESUME_WAIT_MS) }),
+            new Promise((resolve) => { timer = setTimeout(resolve, AUDIO_RESUME_WAIT_MS) }),
           ])
-        } catch { }
+        } catch { } finally { clearTimeout(timer) }
       }
+      assertAudioActive(ctx2)
       return ctx2
     }
 
@@ -499,6 +525,7 @@ window.__ModuleLoader__.load({
       const pre = await playableCtx()
       if (pre.blocked) return { ok: false, reason: pre.blocked }
       try {
+        assertAudioActive(pre.ctx2)
         await playSound(sound)
         return { ok: true }
       } catch (error) {
@@ -534,28 +561,41 @@ window.__ModuleLoader__.load({
 
     // ---- 页内通知与标题闪烁 ----
 
-    // 页内通知经公共依赖 @mzzsfy/dsh-toast 展示(栈式多条并存),
-    // 本包只保留标题闪烁通道
+    const KEY_TOAST_APPEARANCE = 'turn-notify:toast-appearance'
+    const TOAST_APPEARANCES = { toast: '标准浮条', panel: '主题卡片' }
+    const readToastAppearance = () => localGet(KEY_TOAST_APPEARANCE) === 'panel' ? 'panel' : 'toast'
+
+    // 每次呈现读取本机偏好,其他窗口更改及二次提醒同样即时生效。
+    function showPageNotification(text, onClick) {
+      return toast?.(text, { holdMs: TOAST_MS, appearance: readToastAppearance(), onClick })
+    }
+
+    function previewPageNotification() {
+      return showPageNotification('[dsh] 页内通知样式预览\n耗时 12 秒 · 1.5k tokens · 已完成任务')
+    }
 
     let blinkTimer = null
     let blinkStopTimer = null
+    let blinkDeadline = null
     const baseTitle = () => document.title.replace(/^⏳ /, '')
 
     // 连环通知(并行会话批量报错)间隔小于 TOAST_MS 时,闪烁会被逐条续命;
     // 硬顶 BLINK_MAX_MS 保证任何情况下标题必停,焦点返回时由可见性同步立即清除
     function startTitleBlink() {
-      if (blinkTimer !== null) {
-        clearTimeout(blinkStopTimer)
-        blinkStopTimer = setTimeout(stopTitleBlink, BLINK_MAX_MS - BLINK_MS)
-        return
+      const now = Date.now()
+      if (blinkTimer === null) {
+        blinkDeadline = now + BLINK_MAX_MS
+        blinkTimer = setInterval(() => {
+          if (Date.now() >= blinkDeadline) { stopTitleBlink(); return }
+          document.title = document.title.startsWith('⏳ ') ? baseTitle() : '⏳ ' + baseTitle()
+        }, BLINK_MS)
       }
-      blinkTimer = setInterval(() => {
-        document.title = document.title.startsWith('⏳ ') ? baseTitle() : '⏳ ' + baseTitle()
-      }, BLINK_MS)
-      blinkStopTimer = setTimeout(stopTitleBlink, TOAST_MS)
+      clearTimeout(blinkStopTimer)
+      blinkStopTimer = setTimeout(stopTitleBlink, Math.max(0, Math.min(now + TOAST_MS, blinkDeadline) - now))
     }
 
     function stopTitleBlink() {
+      blinkDeadline = null
       if (blinkStopTimer !== null) {
         clearTimeout(blinkStopTimer)
         blinkStopTimer = null
@@ -570,9 +610,9 @@ window.__ModuleLoader__.load({
 
     // onOutcome 仅供测试路径取显示回执(onshow/onerror),真实路径吞错降级已在链路内。
     // onclick 点击直达:聚焦窗口并切到对应会话后关闭弹窗;summary 作 body 两级呈现
-    function notifySystem(unit, onOutcome) {
+    function notifySystem(unit, onOutcome, silent = false) {
       try {
-        const notification = new Notification(unit.text, { tag: unit.id, body: unit.summary ?? '' })
+        const notification = new Notification(unit.text, { tag: unit.id, body: unit.summary ?? '', ...(silent ? { silent: true } : {}) })
         notification.onclick = () => {
           try {
             if (typeof window.focus === 'function') window.focus()
@@ -675,10 +715,7 @@ window.__ModuleLoader__.load({
           rememberSessionHighlight(unit, engaged)
         }
         if (channels.toast) {
-          toast?.(unit.text + (unit.summary ? '\n' + unit.summary : ''), {
-            holdMs: TOAST_MS,
-            onClick: activateSessionFromUnit(unit),
-          })
+          showPageNotification(unit.text + (unit.summary ? '\n' + unit.summary : ''), activateSessionFromUnit(unit))
         }
         // 页内提示音与通知声音互斥(pageSound 已含 !sound),同一通知至多一声;
         // toast 库缺失时卡片不存在,补位音随之禁用(声明与可用分离,可用性在调用点合流);
@@ -688,7 +725,7 @@ window.__ModuleLoader__.load({
         }
         // 声音关闭只静音自身:system 弹窗与 blink 降级通道独立判断,不因无声 continue 连坐
         if (channels.sound) playSound(sound).catch(() => {})
-        if (channels.system) notifySystem(unit)
+        if (channels.system) notifySystem(unit, undefined, channels.systemSilent)
         else if (channels.blink && localGet(KEY_DEGRADE_HINT) !== '0') startTitleBlink()
         // 等待用户动作的事件超时未处理:补发一轮提醒(审批与提问)
         scheduleActionReminder(unit, channels)
@@ -1034,7 +1071,7 @@ window.__ModuleLoader__.load({
         pendingReminders.delete(unit.id)
         if (actionHandled(unit)) return
         // 补发独立于聚焦静默与路由名单:它就是"通道没送达"的兜底
-        toast?.('[再次提醒] ' + unit.text + (unit.summary ? '\n' + unit.summary : ''), { holdMs: TOAST_MS, onClick: activateSessionFromUnit(unit) })
+        showPageNotification('[再次提醒] ' + unit.text + (unit.summary ? '\n' + unit.summary : ''), activateSessionFromUnit(unit))
         playSound(resolveSound(unit.category, effectiveMapping(), uploadedIds)).catch(() => {})
         startTitleBlink()
       }, ACTION_REMIND_MS)
@@ -1122,6 +1159,7 @@ window.__ModuleLoader__.load({
         const highlightListener = window[KEY_HL_LISTENER]
         const highlightVisibility = window[KEY_HL_VISIBLE]
         const highlightObserver = window[KEY_HL_OBSERVER]
+        const disposeAudio = startAudio()
         refreshSounds()
         const dispose = () => {
           if (stopNotifications !== dispose) return
@@ -1129,6 +1167,7 @@ window.__ModuleLoader__.load({
           snapshot.dispose()
           controller.abort()
           closeClaimDb()
+          disposeAudio()
           for (const item of notificationOwners) item.unsubscribe?.()
           notificationOwners.clear()
           activeNotificationOwner = null
@@ -1204,48 +1243,48 @@ window.__ModuleLoader__.load({
       '.tn-panel { display:flex; flex-direction:column; gap:14px; color:inherit; font-size:13px; }',
       '.tn-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }',
       '.tn-head__title { font-weight:650; font-size:15px; letter-spacing:0.2px; }',
-      '.tn-head__hint { color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); font-size:12px; }',
+      '.tn-head__hint { color:var(--dsw-alias-label-tertiary); font-size:12px; }',
       // tab 栏:segmented 胶囊组,激活态 brand 底,面板一屏只呈现一类配置
       '.tn-tabs { display:flex; gap:2px; padding:3px; border-radius:10px;',
-      '  background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.12)); }',
+      '  background:var(--dsw-alias-bg-layer-2); }',
       '.tn-tab { flex:1; min-width:0; border:none; background:transparent; cursor:pointer;',
       '  padding:6px 8px; border-radius:8px; font-size:12.5px; font-family:inherit; text-align:center;',
-      '  color:var(--dsw-alias-label-secondary, inherit); transition:background 0.15s, color 0.15s; }',
+      '  color:var(--dsw-alias-label-secondary); transition:background 0.15s, color 0.15s; }',
       '.tn-tab:hover { color:var(--dsw-alias-label-primary);',
-      '  background:var(--dsw-alias-interactive-bg-hover, rgba(128,128,128,0.15)); }',
+      '  background:var(--dsw-alias-interactive-bg-hover); }',
       '.tn-tab--on, .tn-tab--on:hover { background:var(--dsw-alias-brand-primary);',
-      '  color:var(--dsw-alias-bg-base, #fff); font-weight:600; }',
+      '  color:var(--dsw-alias-bg-base); font-weight:600; }',
       '.tn-tab:focus-visible { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:1px; }',
       '.tn-tabpanel { display:flex; flex-direction:column; gap:14px; }',
-      '.tn-card { border:1px solid var(--dsw-alias-border-l1, var(--dsw-alias-separator-primary, rgba(128,128,128,0.35)));',
-      '  border-radius:12px; padding:14px 16px; background:var(--dsw-alias-bg-layer-1, transparent);',
+      '.tn-card { border:1px solid var(--dsw-alias-border-l1);',
+      '  border-radius:12px; padding:14px 16px; background:var(--dsw-alias-bg-layer-1);',
       '  display:flex; flex-direction:column; gap:12px; }',
       '.tn-card__head { display:flex; flex-direction:column; gap:2px; }',
       '.tn-card__title { font-weight:600; font-size:13px; color:var(--dsw-alias-label-primary); }',
-      '.tn-card__sub { color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); font-size:12px; }',
+      '.tn-card__sub { color:var(--dsw-alias-label-tertiary); font-size:12px; }',
       // 表单行:左标签右控件的 grid,说明文字折行到控件列下方,行结构不随内容换行漂移
       '.tn-field { display:grid; grid-template-columns:76px minmax(0, 1fr); gap:8px 12px; align-items:center; }',
       '.tn-field__label { color:var(--dsw-alias-label-secondary); font-size:12px; }',
       '.tn-field__control { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }',
-      '.tn-field__hint { grid-column:2; color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));',
+      '.tn-field__hint { grid-column:2; color:var(--dsw-alias-label-tertiary);',
       '  font-size:11.5px; line-height:1.5; }',
       '.tn-meta { color:var(--dsw-alias-label-secondary); font-size:12px; }',
-      '.tn-error { color:var(--dsw-alias-state-error-primary, #d43a3a); }',
-      '.tn-btn { cursor:pointer; border:1px solid var(--dsw-alias-border-l2, var(--dsw-alias-separator-primary, rgba(128,128,128,0.35)));',
-      '  background:var(--dsw-alias-bg-layer-2, transparent); color:var(--dsw-alias-label-primary, inherit);',
+      '.tn-error { color:var(--dsw-alias-state-error-primary); }',
+      '.tn-btn { cursor:pointer; border:1px solid var(--dsw-alias-border-l2);',
+      '  background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-primary);',
       '  border-radius:8px; padding:5px 14px; font-size:12px; font-family:inherit; transition:background 0.15s, border-color 0.15s, color 0.15s; }',
-      '.tn-btn:hover { background:var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2, transparent)); }',
+      '.tn-btn:hover { background:var(--dsw-alias-interactive-bg-hover); }',
       '.tn-btn:disabled { opacity:0.45; cursor:default; }',
       '.tn-btn--primary { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary);',
-      '  color:var(--dsw-alias-bg-base, #fff); font-weight:600; }',
-      '.tn-btn--primary:hover { background:var(--dsw-alias-button-primary-hover, var(--dsw-alias-brand-primary)); }',
+      '  color:var(--dsw-alias-bg-base); font-weight:600; }',
+      '.tn-btn--primary:hover { background:var(--dsw-alias-button-primary-hover); }',
       '.tn-btn--ghost { background:transparent; border-color:transparent; color:var(--dsw-alias-label-secondary); }',
-      '.tn-btn--ghost:hover { color:var(--dsw-alias-state-error-primary, #d43a3a);',
-      '  background:var(--dsw-alias-interactive-bg-hover, transparent); }',
-      '.tn-btn--danger:hover { border-color:var(--dsw-alias-state-error-primary, #d43a3a);',
-      '  color:var(--dsw-alias-state-error-primary, #d43a3a); }',
-      '.tn-select, .tn-input { background:var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2, transparent)); color:var(--dsw-alias-label-primary, inherit);',
-      '  border:1px solid var(--dsw-alias-border-l1, var(--dsw-alias-separator-primary, rgba(128,128,128,0.35)));',
+      '.tn-btn--ghost:hover { color:var(--dsw-alias-state-error-primary);',
+      '  background:var(--dsw-alias-interactive-bg-hover); }',
+      '.tn-btn--danger:hover { border-color:var(--dsw-alias-state-error-primary);',
+      '  color:var(--dsw-alias-state-error-primary); }',
+      '.tn-select, .tn-input { background:var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2)); color:var(--dsw-alias-label-primary);',
+      '  border:1px solid var(--dsw-alias-border-l1);',
       '  border-radius:8px; padding:5px 9px; font-size:12px; font-family:inherit; transition:border-color 0.15s; }',
       '.tn-select:focus, .tn-input:focus { outline:none; border-color:var(--dsw-alias-brand-primary); }',
       '.tn-fill { flex:1; min-width:200px; }',
@@ -1253,61 +1292,61 @@ window.__ModuleLoader__.load({
       '.tn-btngroup { display:flex; gap:8px; flex-wrap:wrap; }',
       // pill 开关组:成组分类的快捷切换,选中态 brand 底色
       '.tn-pills { display:flex; gap:6px; flex-wrap:wrap; }',
-      '.tn-pill { cursor:pointer; border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35));',
+      '.tn-pill { cursor:pointer; border:1px solid var(--dsw-alias-border-l2);',
       '  border-radius:999px; padding:3px 12px; font-size:12px; user-select:none;',
-      '  background:var(--dsw-alias-bg-layer-2, transparent); color:var(--dsw-alias-label-secondary);',
+      '  background:var(--dsw-alias-bg-layer-2); color:var(--dsw-alias-label-secondary);',
       '  transition:all 0.15s; }',
       '.tn-pill:hover { border-color:var(--dsw-alias-brand-primary); }',
       '.tn-pill--on { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary);',
-      '  color:var(--dsw-alias-bg-base, #fff); font-weight:600; }',
+      '  color:var(--dsw-alias-bg-base); font-weight:600; }',
       // bot 标签:名称与取消注册组合为一个 chip
-      '.tn-chip { display:inline-flex; align-items:center; gap:2px; border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35));',
+      '.tn-chip { display:inline-flex; align-items:center; gap:2px; border:1px solid var(--dsw-alias-border-l2);',
       '  border-radius:999px; overflow:hidden; font-size:12px; }',
-      '.tn-chip__name { cursor:pointer; border:none; background:transparent; color:var(--dsw-alias-label-primary, inherit);',
+      '.tn-chip__name { cursor:pointer; border:none; background:transparent; color:var(--dsw-alias-label-primary);',
       '  padding:3px 10px; font-size:12px; }',
-      '.tn-chip__name:hover { background:var(--dsw-alias-interactive-bg-hover, transparent); }',
+      '.tn-chip__name:hover { background:var(--dsw-alias-interactive-bg-hover); }',
       '.tn-chip__name--active { color:var(--dsw-alias-brand-primary); font-weight:600; }',
-      '.tn-chip__x { cursor:pointer; border:none; background:transparent; color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));',
-      '  padding:3px 8px; font-size:13px; line-height:1; border-left:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35)); }',
-      '.tn-chip__x:hover { color:var(--dsw-alias-state-error-primary, #d43a3a); background:var(--dsw-alias-interactive-bg-hover, transparent); }',
+      '.tn-chip__x { cursor:pointer; border:none; background:transparent; color:var(--dsw-alias-label-tertiary);',
+      '  padding:3px 8px; font-size:13px; line-height:1; border-left:1px solid var(--dsw-alias-border-l1); }',
+      '.tn-chip__x:hover { color:var(--dsw-alias-state-error-primary); background:var(--dsw-alias-interactive-bg-hover); }',
       // 开关:隐藏原生 checkbox,选中态 track 与 thumb 位移用过渡呈现
       '.tn-switch { display:inline-flex; align-items:center; cursor:pointer; }',
       '.tn-switch input[type="checkbox"] { position:absolute; opacity:0; width:0; height:0; }',
       '.tn-switch__track { position:relative; width:34px; height:19px; border-radius:999px; box-sizing:border-box;',
-      '  background:var(--dsw-alias-bg-layer-2, rgba(128,128,128,0.35));',
-      '  border:1px solid var(--dsw-alias-border-l2, rgba(128,128,128,0.35));',
+      '  background:var(--dsw-alias-bg-layer-2);',
+      '  border:1px solid var(--dsw-alias-border-l2);',
       '  transition:background 0.15s, border-color 0.15s; }',
       '.tn-switch__thumb { position:absolute; top:50%; left:2px; width:13px; height:13px; border-radius:50%;',
-      '  background:var(--dsw-alias-label-tertiary, rgba(128,128,128,0.6));',
+      '  background:var(--dsw-alias-label-tertiary);',
       '  transform:translateY(-50%); transition:left 0.15s, background 0.15s; }',
       '.tn-switch:hover .tn-switch__track { border-color:var(--dsw-alias-brand-primary); }',
       '.tn-switch input[type="checkbox"]:checked + .tn-switch__track { background:var(--dsw-alias-brand-primary); border-color:var(--dsw-alias-brand-primary); }',
-      '.tn-switch input[type="checkbox"]:checked + .tn-switch__track .tn-switch__thumb { left:17px; background:var(--dsw-alias-bg-base, #fff); }',
+      '.tn-switch input[type="checkbox"]:checked + .tn-switch__track .tn-switch__thumb { left:17px; background:var(--dsw-alias-bg-base); }',
       '.tn-switch input[type="checkbox"]:focus-visible + .tn-switch__track { outline:2px solid var(--dsw-alias-brand-primary); outline-offset:1px; }',
       // 目标列表:按行呈现,勾选/名称/移除右对齐
       '.tn-list { display:flex; flex-direction:column; }',
       '.tn-list__item { display:flex; align-items:center; gap:10px; padding:6px 2px; font-size:12px;',
-      '  border-top:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35)); }',
+      '  border-top:1px solid var(--dsw-alias-border-l1); }',
       '.tn-list__item:first-child { border-top:none; }',
       '.tn-list__grow { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;',
-      '  color:var(--dsw-alias-label-primary, inherit); }',
-      '.tn-list__tag { color:var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary)); font-size:11px; }',
-      '.tn-divider { border:none; border-top:1px solid var(--dsw-alias-border-l1, rgba(128,128,128,0.35)); margin:2px 0; }',
+      '  color:var(--dsw-alias-label-primary); }',
+      '.tn-list__tag { color:var(--dsw-alias-label-tertiary); font-size:11px; }',
+      '.tn-divider { border:none; border-top:1px solid var(--dsw-alias-border-l1); margin:2px 0; }',
       'input[type="range"].tn-range { accent-color:var(--dsw-alias-brand-primary); flex:1; min-width:120px; }',
       // 会话行高亮:背景在透明与“背景色与分类色各半混合”间脉冲;分类色用 dsw 语义变量,缺省回退具名色
-      '.tn-sess-hl--completed { --tn-sess-color:var(--dsw-alias-state-success-primary, #34a853); }',
-      '.tn-sess-hl--error { --tn-sess-color:var(--dsw-alias-state-error-primary, #d43a3a); }',
-      '.tn-sess-hl--interrupted { --tn-sess-color:#e08c2e; }',
-      '.tn-sess-hl--approval { --tn-sess-color:#c9a227; }',
-      '.tn-sess-hl--ask { --tn-sess-color:var(--dsw-alias-brand-primary, #4c8dff); }',
+      '.tn-sess-hl--completed { --tn-sess-color:var(--dsw-alias-state-success-primary); }',
+      '.tn-sess-hl--error { --tn-sess-color:var(--dsw-alias-state-error-primary); }',
+      '.tn-sess-hl--interrupted { --tn-sess-color:var(--dsw-alias-state-warn-primary); }',
+      '.tn-sess-hl--approval { --tn-sess-color:var(--dsw-alias-state-warn-primary); }',
+      '.tn-sess-hl--ask { --tn-sess-color:var(--dsw-alias-brand-primary); }',
       '.tn-sess-hl--max-tokens { --tn-sess-color:#9a6fe0; }',
       '.tn-sess-hl { animation:tn-sess-pulse 1.6s ease-in-out infinite; border-radius:8px; }',
       '@keyframes tn-sess-pulse {',
       '  0%,100% { background-color:transparent; }',
-      '  50% { background-color:color-mix(in srgb, var(--tn-sess-color, #4c8dff) 50%, var(--dsw-alias-bg-base, #202020) 50%); }',
+      '  50% { background-color:color-mix(in srgb, var(--tn-sess-color) 50%, var(--dsw-alias-bg-base) 50%); }',
       '}',
       '@media (prefers-reduced-motion: reduce) {',
-      '  .tn-sess-hl { animation:none; background-color:color-mix(in srgb, var(--tn-sess-color, #4c8dff) 50%, var(--dsw-alias-bg-base, #202020) 50%); }',
+      '  .tn-sess-hl { animation:none; background-color:color-mix(in srgb, var(--tn-sess-color) 50%, var(--dsw-alias-bg-base) 50%); }',
       '}',
       // 工作区文件夹运行标记:官方组容器自带 position:relative,运行点绝对定位于
       // 组容器左缘、垂直对齐组头行中线(行高 34px 之半即 top 17px,落于组头行左内边距
@@ -1372,6 +1411,7 @@ window.__ModuleLoader__.load({
       const [pageSoundCategories, setPageSoundCategoriesState] = useState(() => readPageSoundCategories())
       // 页内提示音场景映射镜像:select 变更即写 localStorage,仅存本机
       const [pageMapping, setPageMappingState] = useState(() => readPageMapping())
+      const [toastAppearance, setToastAppearance] = useState(readToastAppearance)
       // 待确认上传:文件选中且解码校验通过后挂起,用户试听并确认才落盘
       const [pendingUploads, setPendingUploads] = useState([])
       // 面板分区:tab 切换仅显隐,不触碰任何已装载状态
@@ -1387,6 +1427,14 @@ window.__ModuleLoader__.load({
             setConfigLoaded(true)
           })
           .catch(() => {})
+      }, [])
+
+      useEffect(() => {
+        const syncAppearance = (event) => {
+          if (event.key === KEY_TOAST_APPEARANCE || event.key === null) setToastAppearance(readToastAppearance())
+        }
+        window.addEventListener('storage', syncAppearance)
+        return () => window.removeEventListener('storage', syncAppearance)
       }, [])
 
       // 操作反馈出口:统一浮出通知,成功 ok / 失败 error;toast 模块缺失降级 console
@@ -1640,7 +1688,7 @@ window.__ModuleLoader__.load({
           patch('toast 库未装载(权威消费方未安装),页内通知通道不可用', 'error')
           return
         }
-        toast('[dsh] 页内通知测试', { holdMs: TOAST_MS })
+        showPageNotification('[dsh] 页内通知测试')
         // 复用页内提示音开关,点火即播,音色按页内场景映射解析;播放结果回执可见
         if (localGet(KEY_PAGE_SOUND) === '1') {
           const sound = resolveSound('completed', effectivePageMapping, soundIds)
@@ -1962,7 +2010,7 @@ window.__ModuleLoader__.load({
               ),
             ], '点分类单独控制该类事件是否出声:亮=出声,暗=静音;总开关关闭时全部静音。页内提示卡片与会话高亮不受影响;被静音分类的系统弹窗与标题闪烁随之静默;页内提示音有独立的开关、分类与音色映射,不随此处变化。'),
             field('系统弹窗', [
-              h('label', { className: 'tn-meta tn-switch', title: '窗口失焦时弹系统级通知,聚焦时静默(见聚焦静默);未授权且声音开启时降级为标题闪烁' },
+              h('label', { className: 'tn-meta tn-switch', title: '窗口失焦时弹系统级通知;聚焦静默时普通浏览器不弹窗,macOS 桌面版仍可保留无声系统通知(须授权且路由放行);未授权时可降级为标题闪烁' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_SYSTEM) !== '0',
                   onChange: (e) => localSet(KEY_SYSTEM, e.target.checked ? '1' : '0'),
@@ -1975,13 +2023,26 @@ window.__ModuleLoader__.load({
                 : null,
             ]),
             field('页内提示', [
-              h('label', { className: 'tn-meta tn-switch', title: '页面角落浮出卡片提示,6 秒自动消失;聚焦窗口内唯一常开的提醒形态' },
+              h('label', { className: 'tn-meta tn-switch', title: '页面角落浮出卡片提示,6 秒自动消失;聚焦静默时仍可显示,macOS 桌面前台还可保留无声系统通知' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_TOAST) !== '0',
                   onChange: (e) => localSet(KEY_TOAST, e.target.checked ? '1' : '0'),
                 }),
                 ' 开启'),
             ], '页面角落浮出卡片提示;聚焦时通知声音静默,提示音的听觉提醒由页内提示音场景独立承担。'),
+            field('提示样式', [
+              h('select', {
+                className: 'tn-select', 'aria-label': '页内提示样式', value: toastAppearance,
+                onChange: (e) => {
+                  localSet(KEY_TOAST_APPEARANCE, e.target.value)
+                  setToastAppearance(readToastAppearance())
+                },
+              }, Object.entries(TOAST_APPEARANCES).map(([value, label]) => h('option', { key: value, value }, label))),
+              h('button', {
+                className: 'tn-btn', disabled: !toast, onClick: previewPageNotification,
+                title: '预览当前页内提示样式,不播放声音',
+              }, '预览样式'),
+            ], '标准浮条使用宿主通知配色;主题卡片使用宿主面板配色,两者均跟随亮暗主题。选择即保存,新通知与二次提醒即时生效。'),
             field('页内提示音', [
               h('label', { className: 'tn-meta tn-switch', title: '页内提示音总开关:页内提示弹出且未播放通知声音时补一声提示(聚焦时通知声音静默,靠它保留听觉提醒);与通知声音互斥,同一通知至多一声,音量与本页音量滑块共用' },
                 ...switchToggle({
@@ -2007,7 +2068,7 @@ window.__ModuleLoader__.load({
               onChange: (e) => localSet(KEY_VOLUME, e.target.value),
             })),
             field('行为', [
-              h('label', { className: 'tn-meta tn-switch', title: '窗口聚焦时只保留页内提示,声音、系统弹窗与标题闪烁全部静默;离开键盘满 5 分钟视为不在电脑前,聚焦也全通道提醒' },
+              h('label', { className: 'tn-meta tn-switch', title: '窗口可见且有焦点时压制通知声音与标题闪烁,保留页内提示;普通浏览器不弹系统通知,macOS 桌面版仍可保留无声系统通知(须授权且路由放行);离开键盘满 5 分钟后,聚焦也全通道提醒' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_DND) !== '0',
                   onChange: (e) => localSet(KEY_DND, e.target.checked ? '1' : '0'),
@@ -2380,7 +2441,7 @@ window.__ModuleLoader__.load({
       },
       // 测试钩子:供全链路集成测试注入 stub 后取内部函数,生产无消费方;
       // 页内通知的展示结果经 require 桩捕获,不在本包断言
-      __test: { poll, pollOnce, storageState, announcedIds, submitCategoryToggle, start, pruneReminders },
+      __test: { poll, pollOnce, storageState, announcedIds, submitCategoryToggle, start, pruneReminders, previewPageNotification },
     }
   },
 })

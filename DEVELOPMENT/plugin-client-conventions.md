@@ -1,5 +1,7 @@
 # 插件 client 规约(UI 控件 / 导航图标 / 样式注入)
 
+视觉决策(色彩槽位 / 尺寸标尺 / 组件视觉参数)见 [plugin-ui-design.md](plugin-ui-design.md),本文件只管结构与注入契约,两份同时生效。
+
 ## 插件 UI 控件规约
 
 - 插件 UI 中的布尔开关一律用开关(switch)形态,即 track 胶囊 + thumb 圆点的视觉开关,禁止裸 `<input type="checkbox">` 直接呈现,也不得用 `<input type="range">` 数值滑块实现布尔语义;多选列表行内的勾选同样用开关。独立布尔偏好用开关;成组分类的快捷切换(如事件分类启停)可用 pill 组(参考 `dsh-turn-notify` 的 `.tn-pill`,选中态 `.tn-pill--on`),不属布尔开关
@@ -36,7 +38,7 @@ document.head.appendChild(style)
 React.createElement('style', { 'data-plugin': '@mzzsfy/<包名>', dangerouslySetInnerHTML: { __html: CSS } })
 ```
 
-- 机制背景:宿主 client-modules 在任意插件材质化时运行 `claimStyles`,把**文档中所有**无 `data-plugin` 的 style(不限 head,含组件树内渲染节点)归属给该材质化插件;该插件 HMR rebuilt 时 `dsh-client-hmr` 的 `removeOwnedStyles` 按 `data-plugin` 逐字匹配整批删除。无标记样式会被后续材质化的插件误收,随其 rebuilt 连带删除,受害插件无新的材质化/挂载触发前不重注,页面裸样式直至刷新——表现为"启动后多次点击后某插件页面偶发丢失 CSS"。机制对齐版本:dsh 0.1.5-rc.1 实测(dsh-client-modules / dsh-client-hmr 的 lib/client.js)
+- 机制背景:宿主 client-modules 在任意插件材质化时运行 `claimStyles`,把**文档中所有**无 `data-plugin` 的 style(不限 head,含组件树内渲染节点)归属给该材质化插件;该插件 HMR rebuilt 时宿主 dsh-client-modules 的 `removeOwnedStyles` 按 `data-plugin` 逐字匹配整批删除。无标记样式会被后续材质化的插件误收,随其 rebuilt 连带删除,受害插件无新的材质化/挂载触发前不重注,页面裸样式直至刷新——表现为"启动后多次点击后某插件页面偶发丢失 CSS"。机制对齐版本:dsh 0.1.5-rc.1 实测(dsh-client-modules 的 lib/client.js)
 - 自带标记后三路径全通:他插件材质化 claimStyles 只收无标记节点(不误收);他插件 rebuilt 删不到本插件样式;自身 rebuilt 先删旧标记样式,fiber refresh 重跑 apply/挂载/渲染路径幂等重注(自愈)
 - 原位复用路径(按 id 找到在位节点仅改 textContent)必须幂等补 `setAttribute('data-plugin', ...)`,防修复前旧代残留的缺标记节点跨代延续(参考 `dsh-common-tools` 的 ensureStyle stale 分支)
 - 标记值禁止另起短名(如省略 @mzzsfy 前缀的包短名):值 != 注册 id 时自身 rebuilt 删不到旧样式,重注被幂等守卫跳过,刷新页面前 CSS 停留在旧版

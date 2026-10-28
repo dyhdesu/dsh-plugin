@@ -338,17 +338,17 @@ test('认领状态机:无锁认领 / 他锁跳过 / 过期接管 / 完成标记�
 
 test('发声通道判定:聚焦静默压声音与系统弹窗,页内提示与系统弹窗独立开关', () => {
   const base = { hasFocus: false, permission: 'granted' }
-  assert.deepEqual(chooseChannels(base), { toast: true, sound: true, system: true, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels(base), { toast: true, sound: true, system: true, systemSilent: false, blink: false, pageSound: false })
   // 聚焦静默:仅页内提示
-  assert.deepEqual(chooseChannels({ ...base, hasFocus: true }), { toast: true, sound: false, system: false, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels({ ...base, hasFocus: true }), { toast: true, sound: false, system: false, systemSilent: false, blink: false, pageSound: false })
   // 聚焦静默可关:聚焦窗口照常发声
   assert.deepEqual(chooseChannels({ ...base, hasFocus: true, focusQuiet: false }).sound, true)
   // 页内提示独立关闭
   assert.deepEqual(chooseChannels({ ...base, toastEnabled: false }).toast, false)
   // 系统弹窗独立关闭:不弹不闪
-  assert.deepEqual(chooseChannels({ ...base, systemEnabled: false }), { toast: true, sound: true, system: false, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels({ ...base, systemEnabled: false }), { toast: true, sound: true, system: false, systemSilent: false, blink: false, pageSound: false })
   // 想弹未授权:降级闪烁
-  assert.deepEqual(chooseChannels({ ...base, permission: 'default' }), { toast: true, sound: true, system: false, blink: true, pageSound: false })
+  assert.deepEqual(chooseChannels({ ...base, permission: 'default' }), { toast: true, sound: true, system: false, systemSilent: false, blink: true, pageSound: false })
   assert.deepEqual(chooseChannels({ ...base, permission: 'denied' }).blink, true)
   // 关闭系统弹窗后未授权不再闪
   assert.deepEqual(chooseChannels({ ...base, permission: 'denied', systemEnabled: false }).blink, false)
@@ -379,7 +379,7 @@ test('页内提示音:聚焦补位发声,失焦让位通知声音,页内分类�
 test('提示音开关:总开关与分类配置独立静音,缺省键与空分类放行', () => {
   const base = { hasFocus: false, permission: 'granted' }
   // 提示音总开关独立关闭:页内提示与系统弹窗不受影响
-  assert.deepEqual(chooseChannels({ ...base, soundEnabled: false }), { toast: true, sound: false, system: true, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels({ ...base, soundEnabled: false }), { toast: true, sound: false, system: true, systemSilent: false, blink: false, pageSound: false })
   // 分类显式 false:该分类静音
   assert.equal(chooseChannels({ ...base, soundCategories: { ask: false }, category: 'ask' }).sound, false)
   // 同配置其他分类照常出声
@@ -394,7 +394,7 @@ test('用户行动空闲满阈值:聚焦也全通道齐发,活跃时维持聚焦
   const base = { hasFocus: true, permission: 'granted' }
   const idle = USER_IDLE_AWAY_MS
   // 空闲满阈值:离开,聚焦静默不再适用,全通道
-  assert.deepEqual(chooseChannels({ ...base, idleMs: idle }), { toast: true, sound: true, system: true, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels({ ...base, idleMs: idle }), { toast: true, sound: true, system: true, systemSilent: false, blink: false, pageSound: false })
   // 恰等边界含
   assert.equal(chooseChannels({ ...base, idleMs: idle - 1 }).sound, false)
   // 活跃(刚行动):聚焦静默维持
@@ -402,7 +402,7 @@ test('用户行动空闲满阈值:聚焦也全通道齐发,活跃时维持聚焦
   // 空闲但未聚焦:行为不变
   assert.equal(chooseChannels({ hasFocus: false, permission: 'granted', idleMs: idle }).sound, true)
   // 未提供空闲时长:行为与旧版一致
-  assert.deepEqual(chooseChannels(base), { toast: true, sound: false, system: false, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels(base), { toast: true, sound: false, system: false, systemSilent: false, blink: false, pageSound: false })
   // 空闲时聚焦静默关闭依旧生效
   assert.equal(chooseChannels({ ...base, idleMs: 0, focusQuiet: false }).sound, true)
 })
@@ -412,7 +412,7 @@ test('桌面前台豁免:foregroundSystem 仅解除 system 聚焦静默,缺省�
   // 缺省关闭:与显式 false 同形,不传新参的既有调用零行为变化
   assert.deepEqual(chooseChannels({ ...base, foregroundSystem: false }), chooseChannels({ ...base }))
   // 豁免:仅 system 穿透聚焦静默,声音与标题闪烁仍静默
-  assert.deepEqual(chooseChannels({ ...base, foregroundSystem: true }), { toast: true, sound: false, system: true, blink: false, pageSound: false })
+  assert.deepEqual(chooseChannels({ ...base, foregroundSystem: true }), { toast: true, sound: false, system: true, systemSilent: true, blink: false, pageSound: false })
   // 不解除声音静默:通知声音仍不出,页内提示音照常聚焦补位
   assert.equal(chooseChannels({ ...base, foregroundSystem: true, pageSoundEnabled: true }).sound, false)
   assert.equal(chooseChannels({ ...base, foregroundSystem: true, pageSoundEnabled: true }).pageSound, true)

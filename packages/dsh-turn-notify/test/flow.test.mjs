@@ -28,7 +28,7 @@ class BrokenStorage {
 // 以注入的 stub 加载真实 src/client.js,返回捕获的模块对象、页内通知捕获表与 window 桩。
 // shortTimers:闪烁常量替换为毫秒级,配合真实定时器验证硬顶与重入(node:test mock.timers
 // 拦截不到 new Function 沙箱里的 timer,不能用于本 loader)
-function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOverride, shortTimers, timerImpl = setTimeout, clearTimerImpl = clearTimeout, intervalImpl = setInterval, clearIntervalImpl = clearInterval, dateImpl = Date, reactImpl, indexedDB, abortSignalImpl = AbortSignal }) {
+function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOverride, shortTimers, timerImpl = setTimeout, clearTimerImpl = clearTimeout, intervalImpl = setInterval, clearIntervalImpl = clearInterval, dateImpl = Date, reactImpl, indexedDB, abortSignalImpl = AbortSignal, notificationImpl }) {
   const raw = readFileSync(join(PKG_ROOT, 'src', 'client.js'), 'utf8').replace('__test: { poll,', '__test: { startTitleBlink, playAudible, poll,')
   assert.ok(raw.includes('__test: { startTitleBlink, playAudible, poll,'), '测试钩子注入锚点失效:src/client.js 的 __test 行格式已变,核对替换锚点')
   const source = shortTimers
@@ -93,7 +93,7 @@ function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOv
     documentStub,
     class { observe() {} disconnect() {} },
     fetchImpl || defaultFetch,
-    undefined,
+    notificationImpl,
     fn => setTimeout(fn, 0),
     id => clearTimeout(id),
     abortSignalImpl,
@@ -120,6 +120,70 @@ function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOv
     },
   }
 }
+
+test('foregroundSystem real factory/poll preserves native silence, permissions, routes and page sound', async (t) => {
+  const cases = [
+    { name: 'quiet desktop', silent: true, audio: false },
+    { name: 'background desktop', focus: false, audio: true },
+    { name: 'hidden despite focus', hidden: true, audio: true },
+    { name: 'idleAway', idle: 5 * 60 * 1000, audio: true },
+    { name: 'focusQuiet off', prefs: { dnd: '0' }, audio: true },
+    { name: 'sound switch off is not quiet', focus: false, prefs: { sound: '0' }, audio: false },
+    { name: 'category mute is not quiet', focus: false, prefs: { 'sound-categories': '{"ask":false}' }, audio: false },
+    { name: 'sound route exclusion is not quiet', focus: false, routes: ['system', 'toast'], audio: false },
+    { name: 'pageSound remains independent', prefs: { 'page-sound': '1' }, silent: true, audio: true },
+    { name: 'pageSound category muted', prefs: { 'page-sound': '1', 'page-sound-categories': '{"ask":false}' }, silent: true, audio: false },
+    { name: 'system denied', permission: 'denied', system: false, audio: false },
+    { name: 'system not granted', permission: 'default', system: false, audio: false },
+    { name: 'system switch off', prefs: { system: '0' }, system: false, audio: false },
+    { name: 'system route excluded', routes: ['toast'], system: false, audio: false },
+    { name: 'all routes excluded', routes: [], system: false, toast: false, audio: false },
+    { name: 'ordinary browser', protocol: 'https:', system: false, audio: false },
+    { name: 'Windows desktop', platform: 'win32', system: false, audio: false },
+  ]
+  for (const c of cases) await t.test(c.name, async () => {
+    const native = [], played = [], timers = new Map()
+    let nextTimer = 0
+    class NotificationStub {
+      static permission = c.permission ?? 'granted'
+      constructor(text, options) { native.push({ text, options }) }
+    }
+    const f = loadClient({
+      storage: new FakeStorage(Object.fromEntries(Object.entries(c.prefs ?? {}).map(([k, v]) => ['turn-notify:' + k, v]))),
+      payload: { version: 1, units: [{ id: 'native-options', category: 'ask', text: 'test', summary: 'summary', routes: c.routes }] },
+      document: { hasFocus: () => c.focus ?? true, hidden: c.hidden ?? false, documentElement: { dataset: { platform: c.platform ?? 'darwin' } }, addEventListener() {}, removeEventListener() {} },
+      notificationImpl: NotificationStub,
+      timerImpl: (fn, delay) => { timers.set(++nextTimer, { fn, delay }); return nextTimer },
+      clearTimerImpl: id => timers.delete(id),
+    })
+    f.window.location = { protocol: c.protocol ?? 'dsh-app:' }
+    f.window.AudioContext = class {
+      state = 'running'; currentTime = 0
+      async resume() {} async close() {}
+      createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} } }
+      createOscillator() { return { frequency: { setValueAtTime() {} }, connect() {}, start() { played.push(1) }, stop() {} } }
+    }
+    const off = f.mod.__test.start()
+    try {
+      for (const listener of f.window.listeners.pointerdown ?? []) listener()
+      f.window.__tnLastActionAt = Date.now() - (c.idle ?? 0)
+      assert.equal(await f.mod.__test.poll(), true)
+      assert.equal(await f.mod.__test.poll(), true)
+      assert.equal(native.length, c.system === false ? 0 : 1)
+      if (native.length) assert.deepEqual(native[0].options, { tag: 'native-options', body: 'summary', ...(c.silent ? { silent: true } : {}) })
+      assert.equal(played.length > 0, c.audio)
+      assert.equal(f.shown.length, c.toast === false ? 0 : 1)
+      if (c.name === 'quiet desktop') {
+        const reminder = [...timers.values()].find(timer => timer.delay === 10 * 60 * 1000)
+        assert.ok(reminder, 'ask still registers a second reminder')
+        reminder.fn()
+        assert.equal(native.length, 1, 'second reminder uses page/audio/blink, not Notification')
+        assert.equal(f.shown.length, 2)
+        assert.ok(played.length > 0, 'existing second-reminder sound stays independent of focus quiet')
+      }
+    } finally { off() }
+  })
+})
 
 test('F22 Given 每隔5秒再通知 When 到首次30秒绝对期限 Then 重入不延长且恢复原标题', () => {
   let now = 0, next = 0

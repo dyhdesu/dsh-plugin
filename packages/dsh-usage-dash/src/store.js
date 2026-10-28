@@ -2,8 +2,9 @@
 // single 布局每次持久化写都全量重发布 unit 文档,故写入侧做合并(write-behind):
 // record 同步累加进内存 pending,按周期 flush 批量落盘,同桶多样本折叠为一次
 // update;flush 失败的行留在 pending 下轮重试,错误经 onFlushError 上抛。
-// 游标读写与 flush 全部串行在同一条 promise 链上,防 lost update。进程级单例
-// 挂 globalThis,防 HMR 热重载后重复开域。
+// 游标读写与 flush 全部串行在同一条 promise 链上,防 lost update。store 实例
+// 按 facility 弱关联缓存,防 HMR 热重载换 facility 后旧实例泄漏或撞单开守卫;
+// 同名域被上一代遗留占用时收养(close 孤儿后重开),不留永久降级。
 
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import { z } from 'zod'
@@ -194,6 +195,30 @@ function isMissingRecord(err) {
   return err instanceof Error && MISSING_RECORD_PATTERN.test(err.message)
 }
 
+// facility 单开守卫错误:宿主版本差异可能无 code,按消息形态兜底
+const ALREADY_OPEN_PATTERN = /is already open/
+
+function isAlreadyOpen(err) {
+  return err instanceof Error && (err.code === 'already-open' || ALREADY_OPEN_PATTERN.test(err.message))
+}
+
+// facility 的同名孤儿域缝:宿主提供 get 诊断面时返回占用域,否则 undefined
+function orphanOf(facility, spec) {
+  return typeof facility.get === 'function' ? facility.get(spec.name) : undefined
+}
+
+// 收养式开域:already-open 且可定位孤儿时释放后重开一次
+async function openAdopting(facility, spec) {
+  try {
+    return await facility.open(spec)
+  } catch (err) {
+    const orphan = orphanOf(facility, spec)
+    if (orphan === undefined || !isAlreadyOpen(err)) throw err
+    await orphan.close()
+    return facility.open(spec)
+  }
+}
+
 export class UsageStore {
   constructor(facility, options = {}) {
     this.now = options.now ?? Date.now
@@ -217,7 +242,19 @@ export class UsageStore {
   }
 
   async initialize(facility) {
-    const domain = await facility.open(usageStatsDomain)
+    // 孤儿域收养:上一代实例未关即被弃(HMR 时序)时 facility 以 reserved 拒开,
+    // 经 get 缝释放孤儿后重开一次;无 get 缝或重开仍失败则走降级,不逃逸。
+    // 主域内联展开收养:openAdopting 的 async 包装会让成功路径多一跳 microtask,
+    // 推迟"游标空而已有行则清空"的检查点,破坏构造方紧随其后的预置写时序
+    let domain
+    try {
+      domain = await facility.open(usageStatsDomain)
+    } catch (err) {
+      const orphan = orphanOf(facility, usageStatsDomain)
+      if (orphan === undefined || !isAlreadyOpen(err)) throw err
+      await orphan.close()
+      domain = await facility.open(usageStatsDomain)
+    }
     this.domain = domain
     this.table = domain.table(TABLE_BUCKETS)
     // 游标空而已有行:无法区分半写坏态,丢弃行交由回扫重建
@@ -226,7 +263,7 @@ export class UsageStore {
       for (const key of [...this.table.keys()]) await this.table.delete(key)
     }
     // 备份域打开失败仅禁用回退能力,不拖垮主采集(openError 只覆盖主域)
-    this.backupDomain = await facility.open(usageBackupDomain).catch(() => undefined)
+    this.backupDomain = await openAdopting(facility, usageBackupDomain).catch(() => undefined)
     this.backupTable = this.backupDomain?.table(TABLE_BUCKETS)
   }
 
@@ -480,13 +517,18 @@ export class UsageStore {
   }
 }
 
-const SHARED_STORE_KEY = '__dshUsageDashStore'
+const SHARED_STORE_KEY = '__dshUsageDashStores'
 
+// 单例按 facility 关联:插件热重载会换 facility 再 apply,全局单 key 缓存会把
+// 绑定旧域的实例泄漏给新一代,或将新一代 open 撞 reserved 固化为永久降级;
+// 未降级实例同 facility 复用,降级/异 facility 一律重建
+// 可作弱键的 facility 才可缓存:服务缺席桩(非对象)退化为不缓存,每次新建
 export function sharedStore(facility, options = {}) {
-  const existing = globalThis[SHARED_STORE_KEY]
-  if (existing) return existing
+  const cacheable = (typeof facility === 'object' && facility !== null) || typeof facility === 'function'
+  const existing = cacheable ? globalThis[SHARED_STORE_KEY]?.get?.(facility) : undefined
+  if (existing && existing.degradation === undefined) return existing
   const store = new UsageStore(facility, options)
-  globalThis[SHARED_STORE_KEY] = store
+  if (cacheable) (globalThis[SHARED_STORE_KEY] ??= new WeakMap()).set(facility, store)
   return store
 }
 

@@ -140,6 +140,12 @@ test('foregroundSystem real factory/poll preserves native silence, permissions, 
     { name: 'all routes excluded', routes: [], system: false, toast: false, audio: false },
     { name: 'ordinary browser', protocol: 'https:', system: false, audio: false },
     { name: 'Windows desktop', platform: 'win32', system: false, audio: false },
+    { name: 'linux desktop', platform: 'linux', system: false, audio: false },
+    { name: 'Windows desktop explicit opt-in', platform: 'win32', prefs: { 'foreground-system': '1' }, silent: true, audio: false },
+    { name: 'darwin explicit opt-out', prefs: { 'foreground-system': '0' }, system: false, audio: false },
+    { name: 'browser explicit opt-in still gated', protocol: 'https:', prefs: { 'foreground-system': '1' }, system: false, audio: false },
+    { name: 'dirty value falls back to darwin default', prefs: { 'foreground-system': 'yes' }, silent: true, audio: false },
+    { name: 'dirty value falls back to win32 default', platform: 'win32', prefs: { 'foreground-system': 'yes' }, system: false, audio: false },
   ]
   for (const c of cases) await t.test(c.name, async () => {
     const native = [], played = [], timers = new Map()
@@ -1132,7 +1138,7 @@ test('Given 偏好面板 When 选择样式与预览 Then 保存本机偏好并�
   const nodes = node => !node || typeof node !== 'object' ? [] : Array.isArray(node)
     ? node.flatMap(nodes) : [node, ...node.children.flatMap(nodes)]
   const button = (tree, label) => nodes(tree).find(node => node.type === 'button' && node.children.includes(label))
-  button(render(), '偏好').props.onClick()
+  button(render(), '提醒渠道').props.onClick()
   const select = nodes(render()).find(node => node.props['aria-label'] === '页内提示样式')
   assert.equal(select.props.value, 'toast')
   const requestsBefore = fetched.length
@@ -1143,16 +1149,13 @@ test('Given 偏好面板 When 选择样式与预览 Then 保存本机偏好并�
   let audioStarts = 0
   winStub.AudioContext = class { constructor() { audioStarts += 1; this.state = 'running' } }
   storage.setItem('turn-notify:page-sound', '1')
-  button(render(), '预览样式').props.onClick()
+  button(render(), '预览效果').props.onClick()
   assert.equal(audioStarts, 0, '即使页内提示音开启,样式预览也不创建音频上下文')
   storage.setItem('turn-notify:page-sound', '0')
   assert.equal(shown.length, 1, '预览仅产生一条页内通知')
   assert.equal(shown[0].opts.appearance, 'panel')
-  button(render(), '测试').props.onClick()
-  button(render(), '测试页内通知').props.onClick()
-  assert.equal(shown[1].text, '[dsh] 页内通知测试')
-  assert.equal(shown[1].opts.appearance, 'panel')
-  button(render(), '偏好').props.onClick()
+  button(render(), '提醒渠道').props.onClick()
+  assert.equal(nodes(render()).find(node => node.props['aria-label'] === '页内提示样式').props.value, 'panel')
   storage.setItem('turn-notify:toast-appearance', 'toast')
   for (const listener of winStub.listeners.storage) listener({ key: 'turn-notify:toast-appearance' })
   assert.equal(nodes(render()).find(node => node.props['aria-label'] === '页内提示样式').props.value, 'toast')

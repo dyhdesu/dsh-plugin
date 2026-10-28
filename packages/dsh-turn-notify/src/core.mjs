@@ -14,10 +14,10 @@ export const CATEGORIES = [CATEGORY_DONE, CATEGORY_ERROR, CATEGORY_INTERRUPTED, 
 export const CATEGORY_LABELS = {
   [CATEGORY_DONE]: '任务完成',
   [CATEGORY_ERROR]: '任务出错',
-  [CATEGORY_INTERRUPTED]: '被中断',
+  [CATEGORY_INTERRUPTED]: '手动停止',
   [CATEGORY_APPROVAL]: '等待审批',
   [CATEGORY_ASK]: 'AI 提问',
-  [CATEGORY_MAX_TOKENS]: '达到上限',
+  [CATEGORY_MAX_TOKENS]: '回复被截断',
 }
 
 // 内置合成音名(参数见 client 音色表),按分类给默认映射。
@@ -44,7 +44,7 @@ export const BUILTIN_TONES = {
   [TONE_UP_ARPEGGIO]: '上行琶音',
   [TONE_BELL]: '铃铛',
   [TONE_DUO]: '清脆双音',
-  [TONE_ALARM_SQUARE]: '警报方波',
+  [TONE_ALARM_SQUARE]: '急促警报',
   [TONE_LOW_HUM]: '低鸣',
   [TONE_DOUBLE_PING]: '双音提示',
   [TONE_TICK]: '嘀嗒',
@@ -142,12 +142,13 @@ export function shouldNotify({ category, kind, durationMs, settings, header, wak
   return true
 }
 
-export function buildUnit({ id, category, status, sessionTitle, workspace, durationMs, ts, tokens, summary }) {
+export function buildUnit({ id, category, status, sessionId, sessionTitle, workspace, durationMs, ts, tokens, summary }) {
   const label = CATEGORY_LABELS[category] || category
   return {
     id,
     category,
     status,
+    sessionId: typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null,
     session: sessionTitle,
     workspace,
     durationMs,

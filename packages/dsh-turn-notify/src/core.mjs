@@ -296,22 +296,26 @@ export const CHANNELS = ['sound', 'system', 'toast', 'blink', 'webhook', 'im', '
 // 提示音另受分类配置约束:soundCategories 中该分类显式 false 即静音,缺省键与空分类放行。
 // 系统弹窗须授权,想弹而未授权时降级标题闪烁(调用方再按降级提示开关呈现)。
 // idleMs 为距上次用户行动的时长,满阈值视为离开,等效未聚焦。
+// foregroundSystem仅豁免system的聚焦静默，不绕过授权/总开关/事件路由，也不解除声音静默。
+// systemSilent 将此时仍生效的 quiet 意图传到原生通知,不从 sound 开关/分类/路由反推。
 // pageSound 为页内提示音:页内提示弹出且通知声音未播时补一声(聚焦场景的听觉提醒),
 // 不受聚焦静默压制,受页内总开关、页内分类配置(pageSoundCategories,独立于提示音分类)
 // 与通知声音互斥约束(同一通知至多一声)。
 // routes 为事件→通道路由放行名单(null=未配置全放行):单元级 AND 叠加在本机偏好之上,
 // 名单外的呈现通道一律不出。
-export function chooseChannels({ hasFocus, permission, focusQuiet = true, toastEnabled = true, soundEnabled = true, soundCategories = null, category = null, systemEnabled = true, idleMs = null, idleThresholdMs = USER_IDLE_AWAY_MS, pageSoundEnabled = false, pageSoundCategories = null, routes = null }) {
+export function chooseChannels({ hasFocus, permission, focusQuiet = true, toastEnabled = true, soundEnabled = true, soundCategories = null, category = null, systemEnabled = true, idleMs = null, idleThresholdMs = USER_IDLE_AWAY_MS, pageSoundEnabled = false, pageSoundCategories = null, routes = null, foregroundSystem = false }) {
   const idleAway = typeof idleMs === 'number' && idleMs >= idleThresholdMs
   const quiet = hasFocus && focusQuiet && !idleAway
   const categoryMuted = soundCategories != null && category != null && soundCategories[category] === false
   const pageCategoryMuted = pageSoundCategories != null && category != null && pageSoundCategories[category] === false
   const routed = (channel) => routes === null || routes.indexOf(channel) >= 0
   const sound = !quiet && soundEnabled && !categoryMuted && routed('sound')
+  const system = (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system')
   return {
     toast: toastEnabled && routed('toast'),
     sound,
-    system: !quiet && systemEnabled && permission === 'granted' && routed('system'),
+    system,
+    systemSilent: system && quiet && foregroundSystem,
     blink: !quiet && systemEnabled && permission !== 'granted' && routed('blink'),
     pageSound: pageSoundEnabled && toastEnabled && !pageCategoryMuted && !sound && routed('toast'),
   }

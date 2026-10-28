@@ -274,7 +274,7 @@ window.__ModuleLoader__.load({
 
     // routes 为事件→通道路由放行名单(null=未配置全放行),语义与 core 同源。
     // 宿主通知去重由浏览器优先模型承载:浏览器在场时宿主让位,本窗口照常弹系统通知
-    function chooseChannels(hasFocus, permission, idleMs, soundCategories, category, routes) {
+    function chooseChannels(hasFocus, permission, idleMs, soundCategories, category, routes, foregroundSystem = false) {
       const idleAway = typeof idleMs === 'number' && idleMs >= IDLE_AWAY_MS
       const quiet = hasFocus && localGet(KEY_DND) !== '0' && !idleAway
       const systemEnabled = localGet(KEY_SYSTEM) !== '0'
@@ -285,10 +285,12 @@ window.__ModuleLoader__.load({
       const pageCategoryMuted = pageSoundCategories != null && category != null && pageSoundCategories[category] === false
       const routed = (channel) => routes == null || routes.indexOf(channel) >= 0
       const sound = !quiet && soundEnabled && !categoryMuted && routed('sound')
+      const system = (!quiet || foregroundSystem) && systemEnabled && permission === 'granted' && routed('system')
       return {
         toast: toastEnabled && routed('toast'),
         sound,
-        system: !quiet && systemEnabled && permission === 'granted' && routed('system'),
+        system,
+        systemSilent: system && quiet && foregroundSystem,
         blink: !quiet && systemEnabled && permission !== 'granted' && routed('blink'),
         pageSound: localGet(KEY_PAGE_SOUND) === '1' && toastEnabled && !pageCategoryMuted && !sound && routed('toast'),
       }
@@ -608,9 +610,9 @@ window.__ModuleLoader__.load({
 
     // onOutcome 仅供测试路径取显示回执(onshow/onerror),真实路径吞错降级已在链路内。
     // onclick 点击直达:聚焦窗口并切到对应会话后关闭弹窗;summary 作 body 两级呈现
-    function notifySystem(unit, onOutcome) {
+    function notifySystem(unit, onOutcome, silent = false) {
       try {
-        const notification = new Notification(unit.text, { tag: unit.id, body: unit.summary ?? '' })
+        const notification = new Notification(unit.text, { tag: unit.id, body: unit.summary ?? '', ...(silent ? { silent: true } : {}) })
         notification.onclick = () => {
           try {
             if (typeof window.focus === 'function') window.focus()
@@ -705,7 +707,9 @@ window.__ModuleLoader__.load({
         }
         if (!claimed) continue
         markDone(unit.id)
-        const channels = chooseChannels(engaged, notificationPermission(), Date.now() - lastActionAt(), readSoundCategories(), unit.category, unit.routes ?? null)
+        // macOS桌面前台也保留可点击系统通知；只豁免system，不改变声音或路由/权限。
+        const foregroundSystem = window.location?.protocol === 'dsh-app:' && document.documentElement?.dataset?.platform === 'darwin'
+        const channels = chooseChannels(engaged, notificationPermission(), Date.now() - lastActionAt(), readSoundCategories(), unit.category, unit.routes ?? null, foregroundSystem)
         const sound = resolveSound(unit.category, effectiveMapping(), uploadedIds)
         if (channels.toast || channels.sound || channels.system || channels.blink) {
           rememberSessionHighlight(unit, engaged)
@@ -721,7 +725,7 @@ window.__ModuleLoader__.load({
         }
         // 声音关闭只静音自身:system 弹窗与 blink 降级通道独立判断,不因无声 continue 连坐
         if (channels.sound) playSound(sound).catch(() => {})
-        if (channels.system) notifySystem(unit)
+        if (channels.system) notifySystem(unit, undefined, channels.systemSilent)
         else if (channels.blink && localGet(KEY_DEGRADE_HINT) !== '0') startTitleBlink()
         // 等待用户动作的事件超时未处理:补发一轮提醒(审批与提问)
         scheduleActionReminder(unit, channels)
@@ -2006,7 +2010,7 @@ window.__ModuleLoader__.load({
               ),
             ], '点分类单独控制该类事件是否出声:亮=出声,暗=静音;总开关关闭时全部静音。页内提示卡片与会话高亮不受影响;被静音分类的系统弹窗与标题闪烁随之静默;页内提示音有独立的开关、分类与音色映射,不随此处变化。'),
             field('系统弹窗', [
-              h('label', { className: 'tn-meta tn-switch', title: '窗口失焦时弹系统级通知,聚焦时静默(见聚焦静默);未授权且声音开启时降级为标题闪烁' },
+              h('label', { className: 'tn-meta tn-switch', title: '窗口失焦时弹系统级通知;聚焦静默时普通浏览器不弹窗,macOS 桌面版仍可保留无声系统通知(须授权且路由放行);未授权时可降级为标题闪烁' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_SYSTEM) !== '0',
                   onChange: (e) => localSet(KEY_SYSTEM, e.target.checked ? '1' : '0'),
@@ -2019,7 +2023,7 @@ window.__ModuleLoader__.load({
                 : null,
             ]),
             field('页内提示', [
-              h('label', { className: 'tn-meta tn-switch', title: '页面角落浮出卡片提示,6 秒自动消失;聚焦窗口内唯一常开的提醒形态' },
+              h('label', { className: 'tn-meta tn-switch', title: '页面角落浮出卡片提示,6 秒自动消失;聚焦静默时仍可显示,macOS 桌面前台还可保留无声系统通知' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_TOAST) !== '0',
                   onChange: (e) => localSet(KEY_TOAST, e.target.checked ? '1' : '0'),
@@ -2064,7 +2068,7 @@ window.__ModuleLoader__.load({
               onChange: (e) => localSet(KEY_VOLUME, e.target.value),
             })),
             field('行为', [
-              h('label', { className: 'tn-meta tn-switch', title: '窗口聚焦时只保留页内提示,声音、系统弹窗与标题闪烁全部静默;离开键盘满 5 分钟视为不在电脑前,聚焦也全通道提醒' },
+              h('label', { className: 'tn-meta tn-switch', title: '窗口可见且有焦点时压制通知声音与标题闪烁,保留页内提示;普通浏览器不弹系统通知,macOS 桌面版仍可保留无声系统通知(须授权且路由放行);离开键盘满 5 分钟后,聚焦也全通道提醒' },
                 ...switchToggle({
                   defaultChecked: localGet(KEY_DND) !== '0',
                   onChange: (e) => localSet(KEY_DND, e.target.checked ? '1' : '0'),

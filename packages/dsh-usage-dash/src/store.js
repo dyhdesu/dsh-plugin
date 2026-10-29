@@ -195,30 +195,6 @@ function isMissingRecord(err) {
   return err instanceof Error && MISSING_RECORD_PATTERN.test(err.message)
 }
 
-// facility 单开守卫错误:宿主版本差异可能无 code,按消息形态兜底
-const ALREADY_OPEN_PATTERN = /is already open/
-
-function isAlreadyOpen(err) {
-  return err instanceof Error && (err.code === 'already-open' || ALREADY_OPEN_PATTERN.test(err.message))
-}
-
-// facility 的同名孤儿域缝:宿主提供 get 诊断面时返回占用域,否则 undefined
-function orphanOf(facility, spec) {
-  return typeof facility.get === 'function' ? facility.get(spec.name) : undefined
-}
-
-// 收养式开域:already-open 且可定位孤儿时释放后重开一次
-async function openAdopting(facility, spec) {
-  try {
-    return await facility.open(spec)
-  } catch (err) {
-    const orphan = orphanOf(facility, spec)
-    if (orphan === undefined || !isAlreadyOpen(err)) throw err
-    await orphan.close()
-    return facility.open(spec)
-  }
-}
-
 export class UsageStore {
   constructor(facility, options = {}) {
     this.now = options.now ?? Date.now
@@ -242,19 +218,8 @@ export class UsageStore {
   }
 
   async initialize(facility) {
-    // 孤儿域收养:上一代实例未关即被弃(HMR 时序)时 facility 以 reserved 拒开,
-    // 经 get 缝释放孤儿后重开一次;无 get 缝或重开仍失败则走降级,不逃逸。
-    // 主域内联展开收养:openAdopting 的 async 包装会让成功路径多一跳 microtask,
-    // 推迟"游标空而已有行则清空"的检查点,破坏构造方紧随其后的预置写时序
-    let domain
-    try {
-      domain = await facility.open(usageStatsDomain)
-    } catch (err) {
-      const orphan = orphanOf(facility, usageStatsDomain)
-      if (orphan === undefined || !isAlreadyOpen(err)) throw err
-      await orphan.close()
-      domain = await facility.open(usageStatsDomain)
-    }
+    // 占用不等于无主:开域失败只降级,不关闭其他实例仍在写入的句柄。
+    const domain = await facility.open(usageStatsDomain)
     this.domain = domain
     this.table = domain.table(TABLE_BUCKETS)
     // 游标空而已有行:无法区分半写坏态,丢弃行交由回扫重建
@@ -263,7 +228,7 @@ export class UsageStore {
       for (const key of [...this.table.keys()]) await this.table.delete(key)
     }
     // 备份域打开失败仅禁用回退能力,不拖垮主采集(openError 只覆盖主域)
-    this.backupDomain = await openAdopting(facility, usageBackupDomain).catch(() => undefined)
+    this.backupDomain = await facility.open(usageBackupDomain).catch(() => undefined)
     this.backupTable = this.backupDomain?.table(TABLE_BUCKETS)
   }
 

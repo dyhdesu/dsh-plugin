@@ -563,19 +563,19 @@ test('域打开失败进入降级:ready 可等待,操作按调用失败', async 
   assert.deepEqual(await store.liveSequences(), new Map())
 })
 
-test('globalThis 单例按 facility 关联:同 facility 同实例,异 facility 新实例', () => {
+test('globalThis 单例按 facility 关联:同 facility 同实例,异 facility 新实例', async () => {
   __resetSharedStoreForTests()
   const facilityA = facilityOf(fakeDomain())
-  const a = sharedStore(facilityA)
-  assert.equal(sharedStore(facilityA), a)
-  assert.notEqual(sharedStore(facilityOf(fakeDomain())), a)
+  const a = await sharedStore(facilityA)
+  assert.equal(await sharedStore(facilityA), a)
+  assert.notEqual(await sharedStore(facilityOf(fakeDomain())), a)
   __resetSharedStoreForTests()
 })
 
 test('降级实例不复用:同 facility 再取重建新实例', async () => {
   __resetSharedStoreForTests()
   const facility = { open: () => Promise.reject(new Error("domain 'usage_stats' is already open")) }
-  const degraded = sharedStore(facility)
+  const degraded = await sharedStore(facility)
   await degraded.readyPromise()
   assert.ok(degraded.degradation)
   const fresh = sharedStore(facility)
@@ -589,9 +589,7 @@ test('非对象 facility(服务缺席桩)不缓存:每次新建', () => {
   __resetSharedStoreForTests()
 })
 
-// 同名域被上一代实例遗留占用(facility reserved 拒绝重开)时,
-// store 收养孤儿域(close 后重开)而非固化为永久降级。
-// withCode=false 模拟旧版宿主:同形错误无 code,收养按消息形态兜底识别
+// 同名域占用不证明无主;get 诊断面不可授权关闭活跃 owner。
 function facilityWithReserved({ withCode = true } = {}) {
   const reserved = new Map()
   const closes = []
@@ -612,32 +610,60 @@ function facilityWithReserved({ withCode = true } = {}) {
   return { open, get: (name) => reserved.get(name), closes }
 }
 
-test('孤儿域占用:already open 时收养(close 孤儿后重开),store 恢复健康', async () => {
+for (const withCode of [true, false]) {
+  test(`Given occupied domain with code=${withCode}, When another store opens, Then owner stays live and newcomer degrades`, async () => {
+    __resetSharedStoreForTests()
+    const facility = facilityWithReserved({ withCode })
+    const owner = await facility.open({ name: 'usage_stats' })
+    await facility.open({ name: 'usage_stats_backup' })
+    const store = sharedStore(facility)
+    await store.readyPromise()
+    assert.ok(store.degradation)
+    assert.equal(facility.get('usage_stats'), owner)
+    assert.deepEqual(facility.closes, [])
+    await owner.global.set({ stillLive: true })
+    assert.deepEqual(owner.global.get(), { stillLive: true })
+    await assert.rejects(store.record(tokenSample(local(2026, 8, 2, 14, 37))), /usage store degraded/)
+    __resetSharedStoreForTests()
+  })
+}
+
+test('UO1 Given old owner with seen cursor and pending tokens, When new generation opens, Then old owner flushes every bucket once', async () => {
   __resetSharedStoreForTests()
   const facility = facilityWithReserved()
-  // 模拟上一代实例遗留:主域与备份域均被占用
-  await facility.open({ name: 'usage_stats' })
-  await facility.open({ name: 'usage_stats_backup' })
-
-  const store = sharedStore(facility)
-  await store.readyPromise()
-  assert.equal(store.degradation, undefined)
-  await store.record(tokenSample(local(2026, 8, 2, 14, 37)))
-  await store.flushNow()
-  assert.equal((await store.rangeRows('D', '2026-08-02', '2026-08-02')).length, 1)
-  assert.deepEqual([...facility.closes].sort(), ['usage_stats', 'usage_stats_backup'])
+  const old = new UsageStore(facility)
+  await old.readyPromise()
+  await old.markSeenSessions(['s1'])
+  await old.record(tokenSample(local(2026, 8, 2, 14, 37)))
+  clearTimeout(old.flushTimer)
+  const newcomer = sharedStore(facility)
+  await newcomer.readyPromise()
+  assert.deepEqual(facility.closes, [])
+  assert.ok(newcomer.degradation)
+  await old.flushNow()
+  const rows = await old.rangeRows('D', '2026-08-02', '2026-08-02')
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].inputTokens, 10)
+  assert.equal(rows[0].outputTokens, 20)
+  assert.deepEqual(await old.seenSessions(), new Set(['s1']))
+  await old.flushNow()
+  assert.equal((await old.rangeRows('D', '2026-08-02', '2026-08-02'))[0].inputTokens, 10)
   __resetSharedStoreForTests()
 })
 
-test('孤儿域占用且错误无 code:按消息形态兜底收养', async () => {
+test('UO3 Given occupied backup only, When main opens, Then collection works and backup owner is untouched', async () => {
   __resetSharedStoreForTests()
-  const facility = facilityWithReserved({ withCode: false })
-  await facility.open({ name: 'usage_stats' })
-
+  const facility = facilityWithReserved()
+  const backup = await facility.open({ name: 'usage_stats_backup' })
   const store = sharedStore(facility)
   await store.readyPromise()
   assert.equal(store.degradation, undefined)
-  assert.deepEqual(facility.closes, ['usage_stats'])
+  assert.equal(facility.get('usage_stats_backup'), backup)
+  assert.deepEqual(facility.closes, [])
+  await store.record(tokenSample(local(2026, 8, 2, 14, 37)))
+  clearTimeout(store.flushTimer)
+  await store.flushNow()
+  assert.equal((await store.rangeRows('D', '2026-08-02', '2026-08-02'))[0].inputTokens, 10)
   __resetSharedStoreForTests()
 })
 

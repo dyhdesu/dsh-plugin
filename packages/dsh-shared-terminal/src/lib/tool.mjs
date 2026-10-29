@@ -140,12 +140,13 @@ export function createTerminalTool({ controller, readScreen, defineTool, pumpFac
           if (!validateKeys(args, ['action', 'terminal_id', 'text', 'submit']) || !validateTerminalId(args.terminal_id) || typeof args.text !== 'string' || (hasOwn(args, 'submit') && typeof args.submit !== 'boolean')) {
             return invalid('INVALID_ARGS', 'write 需要 terminal_id、字符串 text、可选布尔 submit，且不能含未知字段')
           }
+          exec.signal?.throwIfAborted()
           const info = controller.list(sessionId).find((row) => row.id === args.terminal_id)
           if (!info) return invalid('TERMINAL_UNAVAILABLE', 'terminal 不在当前 Session')
           if (pumpFactory) {
             // 0.2.1-rc.2 attach 模型:自持附着写,写失败自动重抢一次;不依赖 UI 附着
             try {
-              await pumpFactory.for(agent, args.terminal_id).write(args.text + (args.submit === true ? '\r' : ''))
+              await pumpFactory.for(agent, args.terminal_id).write(args.text + (args.submit === true ? '\r' : ''), exec.signal)
             } catch (error) {
               if (error.refusal === 'read-only') return invalid('TERMINAL_ERROR', '写入失败(read-only),用户接管中可稍后重试')
               if (error.refusal === 'detached') return invalid('TERMINAL_ERROR', '写入失败(附着断开),请重试')
@@ -183,9 +184,9 @@ export function createTerminalTool({ controller, readScreen, defineTool, pumpFac
 
         if (action === 'close') {
           if (!validateKeys(args, ['action', 'terminal_id']) || !validateTerminalId(args.terminal_id)) return invalid('INVALID_ARGS', 'close 需要有效 terminal_id 且不能含未知字段')
-          await controller.close(agent, args.terminal_id)
-          // 实例销毁,自持附着随行驱逐
+          // 宿主先关闭 identity,即使终止失败也不得复用旧附着。
           pumpFactory?.evict(agent, args.terminal_id)
+          await controller.close(agent, args.terminal_id)
           return { ok: true, terminal_id: args.terminal_id }
         }
         return invalid('INVALID_ARGS', '不支持的 action')

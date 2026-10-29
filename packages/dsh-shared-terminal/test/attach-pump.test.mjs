@@ -174,8 +174,8 @@ test('attach泵_终端消失_异常传播', async () => {
   factory.dispose()
 })
 
-// Given 泵已活动,When factory.dispose,Then 附着 signal 置 abort 且同 terminal 再 for 得到全新泵
-test('attach泵_dispose_停止附着并重置缓存', async () => {
+// Given 泵已活动,When factory.dispose,Then 附着 signal 置 abort 且工厂永久拒绝新泵
+test('attach泵_dispose_停止附着并永久销毁工厂', async () => {
   const { createPumpFactory } = await import('../src/lib/attach-pump.mjs')
   const agent = { id: 'agent-1' }
   const { attachment, signals } = makeEra({ recordSignals: true })
@@ -183,10 +183,8 @@ test('attach泵_dispose_停止附着并重置缓存', async () => {
   await factory.for(agent, 'term-a').write('warmup')
   factory.dispose()
   assert.equal(signals[0].aborted, true, 'dispose 后首个附着 signal 应 abort')
-  const fresh = factory.for(agent, 'term-a')
-  await fresh.write('after-dispose')
-  assert.equal(signals.length, 2, 'dispose 后 for 返回全新泵(新附着)')
-  fresh.stop()
+  assert.throws(() => factory.for(agent, 'term-a'), /disposed/i)
+  assert.equal(signals.length, 1, 'dispose 后不得建立新附着')
 })
 
 // Given 写入全部 ack,When 冷却期内,Then 附着保持(避免高频 attach/detach 触发宿主流 abort 竞态)

@@ -51,6 +51,25 @@ test('Given dispatched write waiting on Controller, When the turn aborts, Then a
   assert.deepEqual(sent, ['echo test\r'])
 })
 
+for (const usePump of [false, true]) {
+  test(`Given pre-aborted write with pump=${usePump}, When executing, Then no input is dispatched`, async () => {
+    const sent = []
+    const controller = makeController({ list() { return [{ id: 'term-a', controllerId: 'attach-a' }] }, async write(...args) { sent.push(args) } })
+    const pumpFactory = usePump ? { for: () => ({ async write(...args) { sent.push(args) } }) } : undefined
+    const result = await makeTool(controller, undefined, pumpFactory).execute({ action: 'write', terminal_id: 'term-a', text: 'cancelled' }, { agent, signal: AbortSignal.abort() })
+    assert.equal(result.ok, false)
+    assert.deepEqual(sent, [])
+  })
+}
+test('Given turn signal, When dispatching pump write, Then signal reaches the pump', async () => {
+  const signal = new AbortController().signal
+  const sent = []
+  const controller = makeController({ list() { return [{ id: 'term-a' }] } })
+  const pumpFactory = { for: () => ({ async write(...args) { sent.push(args) } }) }
+  await makeTool(controller, undefined, pumpFactory).execute({ action: 'write', terminal_id: 'term-a', text: 'x' }, { agent, signal })
+  assert.deepEqual(sent, [['x', signal]])
+})
+
 // ── wait 动作 ─────────────────────────────────────────────────────────
 
 const waitReadScreen = (screens) => {

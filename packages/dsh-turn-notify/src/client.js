@@ -96,6 +96,7 @@ window.__ModuleLoader__.load({
     const KEY_LOCK = 'turn-notify:lock:'
     const KEY_DONE = 'turn-notify:done:'
     const KEY_DND = 'turn-notify:dnd'
+    const KEY_FOREGROUND_SYSTEM = 'turn-notify:foreground-system'
     const KEY_VOLUME = 'turn-notify:volume'
     const KEY_DEGRADE_HINT = 'turn-notify:degrade-hint'
     const KEY_TOAST = 'turn-notify:toast'
@@ -274,6 +275,15 @@ window.__ModuleLoader__.load({
 
     // routes 为事件→通道路由放行名单(null=未配置全放行),语义与 core 同源。
     // 宿主通知去重由浏览器优先模型承载:浏览器在场时宿主让位,本窗口照常弹系统通知
+    function foregroundSystemDefault(platform) {
+      return platform === 'darwin'
+    }
+
+    function readForegroundSystem() {
+      const value = localGet(KEY_FOREGROUND_SYSTEM)
+      return value === '1' || (value !== '0' && foregroundSystemDefault(document.documentElement?.dataset?.platform))
+    }
+
     function chooseChannels(hasFocus, permission, idleMs, soundCategories, category, routes, foregroundSystem = false) {
       const idleAway = typeof idleMs === 'number' && idleMs >= IDLE_AWAY_MS
       const quiet = hasFocus && localGet(KEY_DND) !== '0' && !idleAway
@@ -701,8 +711,8 @@ window.__ModuleLoader__.load({
         }
         if (!claimed) continue
         markDone(unit.id)
-        // macOS桌面前台也保留可点击系统通知；只豁免system，不改变声音或路由/权限。
-        const foregroundSystem = window.location?.protocol === 'dsh-app:' && document.documentElement?.dataset?.platform === 'darwin'
+        // 桌面前台偏好只豁免system，不改变声音或路由/权限。
+        const foregroundSystem = window.location?.protocol === 'dsh-app:' && readForegroundSystem()
         const channels = chooseChannels(engaged, notificationPermission(), Date.now() - lastActionAt(), readSoundCategories(), unit.category, unit.routes ?? null, foregroundSystem)
         const sound = resolveSound(unit.category, effectiveMapping(), uploadedIds)
         if (channels.toast || channels.sound || channels.system || channels.blink) {
@@ -820,9 +830,9 @@ window.__ModuleLoader__.load({
     // 快照遍历:行进入运行状态时清理对应条目,迭代中删除不改快照
     function applySessionHighlights() {
       if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return
-      if (!sessionHighlightEnabled) return
       const current = isEngaged() ? currentSessionId() : null
       if (current !== null) markSessionHandled(current)
+      if (!sessionHighlightEnabled) return
       const wanted = new Map()
       for (const [sessionId, category] of [...sessionHighlights]) {
         const row = findSessionRow(sessionId)
@@ -1383,6 +1393,7 @@ window.__ModuleLoader__.load({
         system: localGet(KEY_SYSTEM) !== '0',
         pageSound: localGet(KEY_PAGE_SOUND) === '1',
         dnd: localGet(KEY_DND) !== '0',
+        foregroundSystem: readForegroundSystem(),
         blink: localGet(KEY_DEGRADE_HINT) !== '0',
         highlight: readSessionHighlightEnabled(),
       }))
@@ -1413,13 +1424,14 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         const syncPreferences = (event) => {
-          const keys = [KEY_SOUND, KEY_TOAST, KEY_SYSTEM, KEY_PAGE_SOUND, KEY_DND, KEY_DEGRADE_HINT, KEY_VOLUME, KEY_TOAST_APPEARANCE, KEY_SOUND_CATEGORIES, KEY_PAGE_SOUND_CATEGORIES, KEY_MAPPING_LOCAL, KEY_MAPPING, KEY_PAGE_MAPPING, KEY_SESSION_HL]
+          const keys = [KEY_SOUND, KEY_TOAST, KEY_SYSTEM, KEY_PAGE_SOUND, KEY_DND, KEY_FOREGROUND_SYSTEM, KEY_DEGRADE_HINT, KEY_VOLUME, KEY_TOAST_APPEARANCE, KEY_SOUND_CATEGORIES, KEY_PAGE_SOUND_CATEGORIES, KEY_MAPPING_LOCAL, KEY_MAPPING, KEY_PAGE_MAPPING, KEY_SESSION_HL]
           if (event.key !== null && !keys.includes(event.key)) return
           setToastAppearance(readToastAppearance())
           setBrowserPrefs({
             sound: localGet(KEY_SOUND) !== '0', toast: localGet(KEY_TOAST) !== '0',
             system: localGet(KEY_SYSTEM) !== '0', pageSound: localGet(KEY_PAGE_SOUND) === '1',
             dnd: localGet(KEY_DND) !== '0', blink: localGet(KEY_DEGRADE_HINT) !== '0',
+            foregroundSystem: readForegroundSystem(),
             highlight: readSessionHighlightEnabled(),
           })
           setSoundVolume(volume())
@@ -1984,7 +1996,7 @@ window.__ModuleLoader__.load({
                   className: 'tn-select', 'aria-label': '最短执行时长', value: String(config.minTurnDurationMs), disabled: !configLoaded || busy,
                   title: '执行时长少于此值时，不发送回合结束类通知（含出错、中断和审批阻塞）；即时审批请求与 AI 提问不受影响。适用于所有提醒方式。',
                   onChange: (e) => setConfigField('minTurnDurationMs', Number(e.target.value)),
-                }, MIN_TURN_CHOICES.map(ms => h('option', { key: ms, value: ms }, ms === 0 ? '不过滤' : '少于 ' + ms / 1000 + ' 秒不通知')))),
+                }, [...new Set([...MIN_TURN_CHOICES, config.minTurnDurationMs])].sort((a, b) => a - b).map(ms => h('option', { key: ms, value: ms }, ms === 0 ? '不过滤' : '少于 ' + ms / 1000 + ' 秒不通知')))),
                 toggle('仅通知主会话', '不发送子代理会话自身的通知，适用于前台与后台委托；不等同于过滤所有后台任务。', config.rootsOnly, value => setConfigField('rootsOnly', value), !configLoaded || busy),
                 toggle('减少委托过程通知', '仅过滤任务完成事件：主会话仍等待后台子代理，或被已结束的子代理唤醒继续工作的回合。出错、审批和提问不受影响。', config.suppressSubagentWake, value => setConfigField('suppressSubagentWake', value), !configLoaded || busy),
               ]),
@@ -2040,6 +2052,7 @@ window.__ModuleLoader__.load({
                   ? testButton('申请通知权限', '允许当前浏览器显示系统通知。', requestPermission) : null,
                 testButton('测试系统通知', '5 秒后发送，请切换到其他应用；测试直接验证浏览器能力。', testSystemNotification, !browserPrefs.system || typeof Notification === 'undefined' || permission === 'denied'),
               ]),
+              toggle('专注时保留无声系统通知', '仅桌面版生效：专注静默时仍发送无声系统通知，不解除提示音静默；macOS 默认开启，其他平台默认关闭。仍须系统通知开关、授权与事件路由允许。仅当前浏览器。', browserPrefs.foregroundSystem, value => setBrowserPref('foregroundSystem', KEY_FOREGROUND_SYSTEM, value), !browserPrefs.system),
               details('系统通知备用提醒', toggle('通知不可用时闪烁标题', '系统通知未获授权或不可用时，在后台闪烁标签页标题；返回页面后停止。', browserPrefs.blink, value => setBrowserPref('blink', KEY_DEGRADE_HINT, value), !browserPrefs.system)),
               h('span', { className: 'tn-meta' }, '以上设置仅当前浏览器生效'),
             ),

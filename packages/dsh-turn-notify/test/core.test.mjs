@@ -22,6 +22,7 @@ import {
   createProjection,
   decideClaim,
   chooseChannels,
+  foregroundSystemDefault,
   USER_IDLE_AWAY_MS,
   resolveSound,
   mergeMapping,
@@ -432,6 +433,14 @@ test('桌面前台豁免:foregroundSystem 仅解除 system 聚焦静默,缺省�
     chooseChannels({ ...base, foregroundSystem: true, idleMs: USER_IDLE_AWAY_MS }),
     chooseChannels({ ...base, foregroundSystem: false, idleMs: USER_IDLE_AWAY_MS }),
   )
+})
+
+// Given darwin/win32/linux/未知平台 When 计算前台豁免缺省 Then 仅 darwin 开,未知平台随非 darwin 关
+test('平台前台豁免缺省:仅 darwin 开', () => {
+  assert.equal(foregroundSystemDefault('darwin'), true)
+  assert.equal(foregroundSystemDefault('win32'), false)
+  assert.equal(foregroundSystemDefault('linux'), false)
+  assert.equal(foregroundSystemDefault(undefined), false)
 })
 
 test('webhook payload 字段映射', () => {

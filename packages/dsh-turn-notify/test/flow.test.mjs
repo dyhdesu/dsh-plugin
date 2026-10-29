@@ -1,6 +1,8 @@
 // 全链路集成测试:加载真实 client.js 模块,注入 broken / 正常 localStorage,
 // 走 pollOnce 完整链路(清理段 → 认领 → 发声),验证降级接线与每事件去重。
-import test from 'node:test'
+import test, { afterEach } from 'node:test'
+const activeDisposers = new Set()
+afterEach(() => { for (const dispose of activeDisposers) dispose(); activeDisposers.clear() })
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -28,7 +30,7 @@ class BrokenStorage {
 // 以注入的 stub 加载真实 src/client.js,返回捕获的模块对象、页内通知捕获表与 window 桩。
 // shortTimers:闪烁常量替换为毫秒级,配合真实定时器验证硬顶与重入(node:test mock.timers
 // 拦截不到 new Function 沙箱里的 timer,不能用于本 loader)
-function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOverride, shortTimers, timerImpl = setTimeout, clearTimerImpl = clearTimeout, intervalImpl = setInterval, clearIntervalImpl = clearInterval, dateImpl = Date, reactImpl, indexedDB, abortSignalImpl = AbortSignal, notificationImpl }) {
+function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOverride, shortTimers, timerImpl = setTimeout, clearTimerImpl = clearTimeout, intervalImpl = setInterval, clearIntervalImpl = clearInterval, dateImpl = Date, reactImpl, indexedDB, abortSignalImpl = AbortSignal, notificationImpl, currentSessionId = null }) {
   const raw = readFileSync(join(PKG_ROOT, 'src', 'client.js'), 'utf8').replace('__test: { poll,', '__test: { startTitleBlink, playAudible, poll,')
   assert.ok(raw.includes('__test: { startTitleBlink, playAudible, poll,'), '测试钩子注入锚点失效:src/client.js 的 __test 行格式已变,核对替换锚点')
   const source = shortTimers
@@ -77,6 +79,7 @@ function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOv
   }
   const defaultFetch = async (path) => {
     if (onFetch) onFetch(path)
+    if (path.endsWith('/sounds')) return { ok: true, json: async () => ({ sounds: [] }) }
     // 首拉返回空投影:真实客户端启动即冷启动对齐,既有"正常消费"语义从第二次轮询起成立
     calls += 1
     if (calls === 1) return { ok: true, json: async () => ({ units: [], soundMapping: {}, version: 0 }) }
@@ -102,20 +105,35 @@ function loadClient({ storage, payload, onFetch, fetchImpl, document: documentOv
   assert.equal(modules.length, 1, 'client.js 模块未被捕获')
   // load({id, factory}) 结构:再调 factory(require) 得到真正的模块对象
   const mod = modules[0].factory(requireStub)
-  const start = mod.__test.start
-  mod.__test.start = () => start(requireStub('@mzzsfy/dsh-common-tools/client').setupCommonTools())
+  const sessionListeners = new Set(), opened = []
+  let current = currentSessionId
+  const services = {
+    sessions: { list: { getSnapshot: () => ({ byId: current === null ? {} : { [current]: { id: current, retainedBy: { mainView: 1 } } } }),
+      subscribe(fn) { sessionListeners.add(fn); return () => sessionListeners.delete(fn) } } },
+    uiWorkspace: { openSession: id => opened.push(id) },
+  }
+  const wrapStart = module => {
+    const start = module.__test.start
+    module.__test.start = () => {
+      const release = start(requireStub('@mzzsfy/dsh-common-tools/client').setupCommonTools(), services)
+      activeDisposers.add(release)
+      return release
+    }
+  }
+  wrapStart(mod)
   return {
     mod,
     shown,
     window: windowStub,
     document: documentStub,
     styleTags,
+    opened,
+    setCurrentSessionId(id) { current = id; for (const fn of sessionListeners) fn() },
     subscriptionCount: () => busHandlers.length,
     emitBus: () => { for (const handlers of busHandlers) handlers.onReset?.() },
     reload() {
       const next = modules[0].factory(requireStub)
-      const start = next.__test.start
-      next.__test.start = () => start(requireStub('@mzzsfy/dsh-common-tools/client').setupCommonTools())
+      wrapStart(next)
       return next
     },
   }
@@ -609,7 +627,7 @@ test('Given 冷启动已对齐 When 新通知到达 Then 正常呈现', async ()
   assert.deepEqual(shown.map((call) => call.text), ['[dsh] 任务完成: t3'])
 })
 
-// ---- 会话行高亮:认领后按投影 session 字段在侧边栏定位行并挂类 ----
+// ---- 会话行高亮:按投影sessionId与官方行身份定位；展示标题不参与匹配 ----
 
 // 最小侧边栏 DOM:列表容器(多标题)→ 多会话行(各单标题),classList 记录变更,click listener 捕获;
 // className 与 classList 双向同步(对齐真 DOM 语义:任一写入对方可见)
@@ -627,6 +645,7 @@ function makeSidebarDom(rows) {
     const leaf = { className: 'a_title', textContent: spec.leafText, querySelectorAll: () => [] }
     const row = {
       leafText: spec.leafText,
+      getAttribute: name => name === 'data-row-key' ? 'session:' + (spec.sessionId ?? spec.leafText) : null,
       textContent: spec.rowText || spec.leafText,
       querySelector: (sel) => (sel.indexOf('_title') >= 0 ? leaf : null),
       querySelectorAll: (sel) => (sel.indexOf('_title') >= 0 ? [leaf] : []),
@@ -641,15 +660,8 @@ function makeSidebarDom(rows) {
     sync('x_row')
     return row
   })
-  const leaves = rows.map((spec, index) => rowEls[index].querySelector('[class*="_title"]'))
-  const listEl = {
-    className: 'x_list',
-    // 容器探测要求子树含多个标题,单行场景补哑叶满足
-    querySelectorAll: (sel) => (sel.indexOf('_title') >= 0 ? leaves.concat([{ className: 'a_title', textContent: '哑叶', querySelectorAll: () => [] }]) : []),
-    children: rowEls,
-  }
   const dom = {
-    querySelectorAll: (sel) => (sel.indexOf('_list') >= 0 ? [listEl] : []),
+    querySelectorAll: (sel) => sel === '[data-row-key]' ? rowEls : sel === '.tn-sess-hl' ? rowEls.filter(row => row.classList.contains('tn-sess-hl')) : [],
     addEventListener: (type, fn) => { (listeners[type] = listeners[type] || []).push(fn) },
     removeEventListener: (type, fn) => { listeners[type] = (listeners[type] || []).filter((f) => f !== fn) },
     listeners,
@@ -658,13 +670,13 @@ function makeSidebarDom(rows) {
   return dom
 }
 
-const clickEventOn = (row) => ({ target: { closest: (sel) => (sel === '.tn-sess-hl' ? row : null) } })
+const clickEventOn = (row) => ({ target: { closest: (sel) => (sel === '[data-row-key]' ? row : null) } })
 
 test('Given 冷启动存量通知带会话标题 When 静默对齐 Then 不呈现但行挂高亮', async () => {
   // 冷启动对齐只静默通知呈现,未读会话闪烁是本机 UI 状态,不属轰炸,必须保留
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-cold', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-cold', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod, shown } = loadClient({
     storage: new FakeStorage(),
@@ -682,13 +694,15 @@ test('Given 冷启动存量通知是当前查看的会话 When 静默对齐 Then
   // 与正常路径同语义:正在查看即已读,不做未读强调
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-cold-cur', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-cold-cur', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
     fetchImpl: async () => ({ ok: true, json: async () => ({ units: hlUnits, soundMapping: {}, version: 1 }) }),
+    currentSessionId: '会话甲',
     document: { title: '会话甲 — DeepSeek Harness', ...dom },
   })
+  mod.__test.start()
   await mod.__test.poll()
   await mod.__test.poll()
   assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false, '正在查看的会话冷启动也不挂高亮')
@@ -697,7 +711,7 @@ test('Given 冷启动存量通知是当前查看的会话 When 静默对齐 Then
 test('Given 高亮开关关闭且冷启动带存量通知 When 静默对齐 Then 不挂任何类', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-off', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-off', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage({ 'turn-notify:session-hl': '0' }),
@@ -713,7 +727,7 @@ test('Given 冷启动存量超过高亮容量上限 When 静默对齐 Then 仅�
   const titles = Array.from({ length: 22 }, (unused, index) => '会话' + (index + 1))
   const dom = makeSidebarDom(titles.map((leafText) => ({ leafText })))
   const hlUnits = titles.map((title, index) => ({
-    id: 'u-cap-' + index, category: 'completed', text: '[dsh] 任务完成: ' + title, session: title,
+    id: 'u-cap-' + index, category: 'completed', text: '[dsh] 任务完成: ' + title, sessionId: title, session: title,
   }))
   const { mod } = loadClient({
     storage: new FakeStorage(),
@@ -728,29 +742,29 @@ test('Given 冷启动存量超过高亮容量上限 When 静默对齐 Then 仅�
   assert.ok(dom.rows[21].classList.set.has('tn-sess-hl'), '最新条目保留')
 })
 
-test('Given 冷启动标题未就绪误挂当前会话 When 标题就绪后任一应用帧 Then 自愈摘除', async () => {
-  // 首拉早于宿主设置 title 时,"正在看即已读"排除失效误挂;就绪后的应用帧复核自愈
+test('Given 冷启动当前身份快照未就绪 When 宿主快照就绪 Then 自愈摘除', async () => {
+  // 首拉早于宿主快照时先保留未读；身份就绪后通过服务订阅自愈。
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-race', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-race', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
-  const { mod, document: docStub } = loadClient({
+  const { mod, setCurrentSessionId } = loadClient({
     storage: new FakeStorage(),
     fetchImpl: async () => ({ ok: true, json: async () => ({ units: hlUnits, soundMapping: {}, version: 1 }) }),
     document: { title: 'dsh', ...dom },
   })
+  mod.__test.start()
   await mod.__test.poll()
   await mod.__test.poll()
-  assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), true, '标题未就绪时误挂,复现竞态')
-  docStub.title = '会话甲 — DeepSeek Harness'
-  await mod.__test.poll()
-  assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false, '标题就绪后应用帧自愈摘除')
+  assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), true, '身份未就绪时保留未读')
+  setCurrentSessionId('会话甲')
+  assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false, '宿主身份就绪后自愈摘除')
 })
 
 test('Given 通知带 session 标题 When 认领 Then 会话行挂上高亮类', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-hl', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-hl', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
@@ -766,13 +780,15 @@ test('Given 通知带 session 标题 When 认领 Then 会话行挂上高亮类',
 test('Given 通知的是当前查看的会话 When 认领 Then 不挂高亮', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-cur', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-cur', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
+    currentSessionId: '会话甲',
     document: { title: '会话甲 — DeepSeek Harness', ...dom },
   })
+  mod.__test.start()
   await mod.__test.poll()
   await mod.__test.poll()
   assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false, '当前查看的会话不应闪烁')
@@ -781,13 +797,15 @@ test('Given 通知的是当前查看的会话 When 认领 Then 不挂高亮', as
 test('Given 当前会话判定不受标题闪烁前缀干扰 When 认领 Then 仍不挂高亮', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-blink', category: 'error', text: '[dsh] 任务出错: 会话甲', session: '会话甲' },
+    { id: 'u-blink', category: 'error', text: '[dsh] 任务出错: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
+    currentSessionId: '会话甲',
     document: { title: '⏳ 会话甲 — DeepSeek Harness', ...dom },
   })
+  mod.__test.start()
   await mod.__test.poll()
   await mod.__test.poll()
   assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false, '闪烁前缀不应破坏当前会话判定')
@@ -796,11 +814,12 @@ test('Given 当前会话判定不受标题闪烁前缀干扰 When 认领 Then �
 test('Given 失焦且通知的是本标签页会话 When 认领 Then 挂高亮', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-away', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-away', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
+    currentSessionId: '会话甲',
     document: { title: '会话甲 — DeepSeek Harness', hasFocus: () => false, ...dom },
   })
   await mod.__test.poll()
@@ -811,12 +830,13 @@ test('Given 失焦且通知的是本标签页会话 When 认领 Then 挂高亮',
 test('Given 失焦期间挂上的当前会话高亮 When 页面重新可见 Then 提醒消失且其他会话保留', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }, { leafText: '会话乙' }])
   const hlUnits = [
-    { id: 'u-away', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
-    { id: 'u-other', category: 'ask', text: '[dsh] AI 提问: 会话乙', session: '会话乙' },
+    { id: 'u-away', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
+    { id: 'u-other', category: 'ask', text: '[dsh] AI 提问: 会话乙', sessionId: '会话乙', session: '会话乙' },
   ]
   const { mod, window: winStub, document: docStub } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
+    currentSessionId: '会话甲',
     document: { title: '会话甲 — DeepSeek Harness', hasFocus: () => false, ...dom },
   })
   await mod.__test.poll()
@@ -838,11 +858,12 @@ test('Given 失焦挂上的当前会话高亮 When 窗口重获焦点 Then 提�
   // visibilitychange(标签页未切、未最小化),焦点通道负责这一场景
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-foc', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-foc', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod, window: winStub } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
+    currentSessionId: '会话甲',
     document: { title: '会话甲 — DeepSeek Harness', hasFocus: () => false, ...dom },
   })
   await mod.__test.poll()
@@ -860,7 +881,7 @@ test('Given 行处于运行状态 When 通知认领 Then 不挂高亮', async ()
   // 对齐 SessionStatusDots:运行中的会话由原生状态点表达,闪烁只表达"状态已更新"
   const dom = makeSidebarDom([{ leafText: '会话甲', rowText: '进行中会话甲 3分钟' }])
   const hlUnits = [
-    { id: 'u-run', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-run', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
@@ -875,7 +896,7 @@ test('Given 行处于运行状态 When 通知认领 Then 不挂高亮', async ()
 test('Given 已挂高亮 When 行进入运行状态 Then 清除闪烁', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-done', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲' },
+    { id: 'u-done', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
@@ -908,21 +929,21 @@ test('Given 通知标题字段缺失 When 认领 Then 不挂高亮类且链路�
   assert.equal(dom.rows[0].classList.set.has('tn-sess-hl'), false)
 })
 
-// 点击直达:页内卡片 onClick 聚焦窗口并模拟点击侧边栏会话行(切换会话即已读);
-// 无标题通知只聚焦不点击
-test('Given 带标题通知 When 点击页内卡片 Then 聚焦窗口并点击会话行;无标题仅聚焦', async () => {
+// 点击直达使用owner导航服务；无身份仅聚焦，有身份无标题仍可导航。
+test('Given 带身份通知 When 点击页内卡片 Then 聚焦并按ID导航；无身份仅聚焦', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-jump', category: 'completed', text: '[dsh] 任务完成: 会话甲', session: '会话甲', summary: '耗时 12 秒' },
+    { id: 'u-jump', category: 'completed', text: '[dsh] 任务完成: 会话甲', sessionId: '会话甲', session: '会话甲', summary: '耗时 12 秒' },
     { id: 'u-bare', category: 'error', text: '[dsh] 任务出错: 无标题' },
   ]
   const focuses = []
-  const { mod, shown, window: winStub } = loadClient({
+  const { mod, shown, opened, window: winStub } = loadClient({
     storage: new FakeStorage(),
     payload: { units: hlUnits, soundMapping: {}, version: 1 },
     document: { title: '会话乙 — DeepSeek Harness', ...dom },
   })
   winStub.focus = () => { focuses.push('focus') }
+  mod.__test.start()
   await mod.__test.poll()
   await mod.__test.poll()
   assert.equal(shown.length, 2)
@@ -932,19 +953,19 @@ test('Given 带标题通知 When 点击页内卡片 Then 聚焦窗口并点击�
   assert.equal(typeof shown[1].opts.onClick, 'function', '无标题通知仍携带回调(仅聚焦)')
   shown[0].opts.onClick()
   assert.deepEqual(focuses, ['focus'], '直达先聚焦窗口')
-  assert.equal(dom.rows[0].clicks, 1, '模拟点击侧边栏会话行切换会话')
-  const clicksBefore = dom.rows[0].clicks
+  assert.deepEqual(opened, ['会话甲'], '通过正式服务按身份切换会话')
+  assert.equal(dom.rows[0].clicks, 0, '导航不依赖DOM点击')
   shown[1].opts.onClick()
   assert.deepEqual(focuses, ['focus', 'focus'])
-  assert.equal(dom.rows[0].clicks, clicksBefore, '无标题通知不点击任何行')
+  assert.deepEqual(opened, ['会话甲'], '无身份通知不导航任何会话')
 })
 
 // 二次提醒:等待用户动作的事件超时未处理补发一轮;已处理(点击行/切到会话)与投影过期不补
 test('Given 审批通知超时未处理 When 提醒到期 Then 补发一轮;已处理与投影过期不补', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }, { leafText: '会话乙' }])
   const hlUnits = [
-    { id: 'u-appr', category: 'approval', text: '[dsh] 等待审批: 会话甲', session: '会话甲' },
-    { id: 'u-done', category: 'completed', text: '[dsh] 任务完成: 会话乙', session: '会话乙' },
+    { id: 'u-appr', category: 'approval', text: '[dsh] 等待审批: 会话甲', sessionId: '会话甲', session: '会话甲' },
+    { id: 'u-done', category: 'completed', text: '[dsh] 任务完成: 会话乙', sessionId: '会话乙', session: '会话乙' },
   ]
   const { mod, shown } = loadClient({
     storage: new FakeStorage(),
@@ -964,7 +985,7 @@ test('Given 审批通知超时未处理 When 提醒到期 Then 补发一轮;已�
 test('Given 审批提醒登记 When 单元过期(prune)Then 不再补发', async () => {
   const dom = makeSidebarDom([{ leafText: '会话甲' }])
   const hlUnits = [
-    { id: 'u-appr-gone', category: 'approval', text: '[dsh] 等待审批: 会话甲', session: '会话甲' },
+    { id: 'u-appr-gone', category: 'approval', text: '[dsh] 等待审批: 会话甲', sessionId: '会话甲', session: '会话甲' },
   ]
   // 第二轮投影不再含该单元:prune 撤销登记
   const { mod, shown } = loadClient({
@@ -984,12 +1005,12 @@ test('Given 审批提醒登记 When 单元过期(prune)Then 不再补发', async
 
 test('Given 短标题先于长前缀行匹配 When 挂类 Then 短标题精确命中自身行', async () => {  // 长标题行在前,短标题是长标题的子串:短标题通知必须挂到全等行,不得被子串误吸
   const dom = makeSidebarDom([
-    { leafText: '修复通知插件长轮询问题' },
-    { leafText: '通知插件' },
+    { sessionId: 'long', leafText: '修复通知插件长轮询问题' },
+    { sessionId: 'short', leafText: '通知插件' },
   ])
   const hlUnits = [
-    { id: 'u-long', category: 'completed', text: '[dsh] 任务完成: 长标题', session: '修复通知插件长轮询问题' },
-    { id: 'u-short', category: 'ask', text: '[dsh] AI 提问: 短标题', session: '通知插件' },
+    { id: 'u-long', category: 'completed', text: '[dsh] 任务完成: 长标题', sessionId: 'long', session: '修复通知插件长轮询问题' },
+    { id: 'u-short', category: 'ask', text: '[dsh] AI 提问: 短标题', sessionId: 'short', session: '通知插件' },
   ]
   const { mod } = loadClient({
     storage: new FakeStorage(),
@@ -1006,12 +1027,12 @@ test('Given 短标题先于长前缀行匹配 When 挂类 Then 短标题精确�
 
 test('Given 两行各自高亮 When 点击其中一行 Then 仅该行清除且另一行不受影响', async () => {
   const dom = makeSidebarDom([
-    { leafText: '修复通知插件长轮询问题' },
-    { leafText: '通知插件' },
+    { sessionId: 'long', leafText: '修复通知插件长轮询问题' },
+    { sessionId: 'short', leafText: '通知插件' },
   ])
   const hlUnits = [
-    { id: 'u-long', category: 'completed', text: '[dsh] 任务完成: 长标题', session: '修复通知插件长轮询问题' },
-    { id: 'u-short', category: 'ask', text: '[dsh] AI 提问: 短标题', session: '通知插件' },
+    { id: 'u-long', category: 'completed', text: '[dsh] 任务完成: 长标题', sessionId: 'long', session: '修复通知插件长轮询问题' },
+    { id: 'u-short', category: 'ask', text: '[dsh] AI 提问: 短标题', sessionId: 'short', session: '通知插件' },
   ]
   const { mod, window: winStub } = loadClient({
     storage: new FakeStorage(),

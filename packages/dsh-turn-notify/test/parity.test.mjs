@@ -13,6 +13,7 @@ import {
   mergeMapping as coreMergeMapping,
   deadCustomIds as coreDeadCustomIds,
   chooseChannels as coreChooseChannels,
+  foregroundSystemDefault as coreForegroundSystemDefault,
   parseVolume as coreParseVolume,
   imTargetKeyOf as coreImTargetKeyOf,
   toggleImTargetList as coreToggleImTargetList,
@@ -41,7 +42,7 @@ function clientLogic() {
   const section = source.slice(begin + '/* LOGIC-BEGIN */'.length, end)
   const factory = new Function(
     section
-      + '; return { decideClaim, resolveSound, mergeMapping, deadCustomIds, chooseChannels, parseVolume, claimEvent, markDone, windowId, localGet, localSet, localDel, storageState, CLAIM_LOCK_TTL_MS, IDLE_AWAY_MS, KEY_DND, KEY_TOAST, KEY_SOUND, KEY_SYSTEM, KEY_PAGE_SOUND, KEY_PAGE_SOUND_CATEGORIES, imTargetKey, toggleImTargetList, removeImTargetFromList, unregisterImBotList, imBoundBotIds, CATEGORIES, CATEGORY_LABELS, DEFAULT_TONES, TONE_LABELS, AUDIO_EXTS, MIME_BY_EXT };',
+      + '; return { decideClaim, resolveSound, mergeMapping, deadCustomIds, chooseChannels, parseVolume, foregroundSystemDefault, claimEvent, markDone, windowId, localGet, localSet, localDel, storageState, CLAIM_LOCK_TTL_MS, IDLE_AWAY_MS, KEY_DND, KEY_TOAST, KEY_SOUND, KEY_SYSTEM, KEY_PAGE_SOUND, KEY_PAGE_SOUND_CATEGORIES, imTargetKey, toggleImTargetList, removeImTargetFromList, unregisterImBotList, imBoundBotIds, CATEGORIES, CATEGORY_LABELS, DEFAULT_TONES, TONE_LABELS, AUDIO_EXTS, MIME_BY_EXT };',
   )
   return factory()
 }
@@ -156,6 +157,15 @@ function defineDeadScenarios(prefix, dead) {
 
 defineDeadScenarios('[core.mjs deadCustomIds] ', coreDeadCustomIds)
 defineDeadScenarios('[client.js deadCustomIds] ', client.deadCustomIds)
+
+// Given darwin/win32/linux/未知平台 When 双实现分别计算前台豁免缺省 Then 四组合输出一致
+test('[parity 数据镜像] 平台前台豁免缺省对照', () => {
+  for (const platform of ['darwin', 'win32', 'linux', undefined]) {
+    assert.equal(client.foregroundSystemDefault(platform), coreForegroundSystemDefault(platform))
+  }
+  assert.equal(coreForegroundSystemDefault('darwin'), true)
+  assert.equal(coreForegroundSystemDefault('win32'), false)
+})
 
 // 四通道矩阵对照:client 版开关取自 localStorage,经 stub 注入后与 core 参数化版本逐场景比对。
 function clientChooseChannels({ hasFocus, permission, focusQuiet, toastEnabled, soundEnabled, soundCategories, category, systemEnabled, idleMs, idleThresholdMs, pageSoundEnabled, pageSoundCategories, routes, foregroundSystem }) {

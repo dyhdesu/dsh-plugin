@@ -306,6 +306,7 @@ export function apply(ctx, config) {
       id: 'n-' + Date.now().toString(36) + '-' + String(seq) + '-' + String(category),
       category,
       status: reasonKind ?? category,
+      sessionId,
       sessionTitle: sessionDisplayTitle(session, sessionId),
       workspace: typeof header.cwd === 'string' ? header.cwd : '',
       durationMs,

@@ -304,6 +304,10 @@ export const CHANNELS = ['sound', 'system', 'toast', 'blink', 'webhook', 'im', '
 // 与通知声音互斥约束(同一通知至多一声)。
 // routes 为事件→通道路由放行名单(null=未配置全放行):单元级 AND 叠加在本机偏好之上,
 // 名单外的呈现通道一律不出。
+export function foregroundSystemDefault(platform) {
+  return platform === 'darwin'
+}
+
 export function chooseChannels({ hasFocus, permission, focusQuiet = true, toastEnabled = true, soundEnabled = true, soundCategories = null, category = null, systemEnabled = true, idleMs = null, idleThresholdMs = USER_IDLE_AWAY_MS, pageSoundEnabled = false, pageSoundCategories = null, routes = null, foregroundSystem = false }) {
   const idleAway = typeof idleMs === 'number' && idleMs >= idleThresholdMs
   const quiet = hasFocus && focusQuiet && !idleAway

@@ -177,6 +177,30 @@ test('Given webhook请求网络失败 When 测试结束 Then 显示失败终态�
   assert.equal(f.control('webhook URL').props.value, 'https://old.example/hook')
 })
 
+test('R2 Given 合法非预设时长 When 查看并修改规则 Then 显示真实值且预设不重复', async () => {
+  const f = fixture({ config: { minTurnDurationMs: 1500 } }); await f.ready(); f.tab('通知规则')
+  const duration = f.control('最短执行时长')
+  const options = nodes(duration).filter(n => n.type === 'option')
+  assert.ok(options.some(n => String(n.props.value) === String(duration.props.value)), '合法当前值必须可显示')
+  assert.match(text(options.find(n => Number(n.props.value) === 1500)), /1\.5 秒/)
+  duration.props.onChange({ target: { value: '5000' } }); await flush()
+  const changed = f.control('最短执行时长')
+  assert.equal(changed.props.value, '5000')
+  assert.equal(nodes(changed).filter(n => n.type === 'option' && Number(n.props.value) === 5000).length, 1)
+})
+
+test('F10 Given 当前浏览器偏好 When 切换前台无声系统通知 Then 本机保存且不写host', async () => {
+  const f = fixture(); await f.ready()
+  const before = f.requests.length
+  const control = f.control('专注时保留无声系统通知')
+  assert.ok(control, '提醒方式包含可操作的前台偏好')
+  assert.equal(control.props.checked, false)
+  control.props.onChange({ target: { checked: true } })
+  assert.equal(f.control('专注时保留无声系统通知').props.checked, true)
+  assert.equal(f.requests.length, before)
+  assert.equal(f.values.get('turn-notify:foreground-system'), '1')
+})
+
 test('Given 通知权限例表 When 查看浏览器通知 Then 已授权无状态而非授权显示红字', async () => {
   for (const permission of ['granted', 'default', 'denied', 'unavailable']) {
     const f = fixture({ permission }); await f.ready()

@@ -16,6 +16,7 @@ import {
   CATEGORY_ASK,
   CATEGORY_APPROVAL,
   MIN_TURN_DURATION_MS,
+  HOST_FOCUS_TIMEOUT_MS,
   OPEN_TURN_STALE_MS,
   SUBAGENT_WAKE_WINDOW_MS,
   buildSummary,
@@ -737,7 +738,7 @@ export function apply(ctx, config) {
           return
         }
         const result = await new Promise((resolve) => {
-          __hostSpawn.impl('/usr/bin/open', ['-b', 'com.deepseek.dsh', 'dsh://open'], { timeout: 5000 }, (error) => {
+          __hostSpawn.impl('/usr/bin/open', ['-b', 'com.deepseek.dsh', 'dsh://open'], { timeout: HOST_FOCUS_TIMEOUT_MS }, (error) => {
             resolve(error ? { ok: false, detail: '无法唤起 DSH 桌面版' } : { ok: true })
           })
         })

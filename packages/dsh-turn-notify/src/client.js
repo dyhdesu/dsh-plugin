@@ -1026,6 +1026,7 @@ window.__ModuleLoader__.load({
             .catch(() => toast?.(hasSessionId(unit) ? '无法唤起 DSH 桌面窗口，请从 Dock 打开；会话已尝试切换' : '无法唤起 DSH 桌面窗口，请从 Dock 打开', { holdMs: TOAST_MS }))
         }
         // 历史投影和无会话测试通知不含 ID,只唤醒,不冒险跳到同名会话。
+        // toast 缺席(公共依赖未装载)时提示面缺失属合法降级,守卫链继续导航
         if (!hasSessionId(unit)) return
         const sessionNavigator = [...sessionNavigators.values()].at(-1)
         if (!sessionNavigator) {

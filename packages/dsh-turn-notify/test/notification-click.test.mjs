@@ -24,7 +24,7 @@ function clickFixture({ protocol = 'dsh-app:', platform = 'darwin', focusThrows 
   const api = async (...args) => { requests.push(args); if (wakeFails) throw new Error('wake'); return { ok: true } }
   const toast = (message) => messages.push(message)
   class Notification { constructor(title, options) { Object.assign(this, { title, options, closed: false }); notifications.push(this) } close() { this.closed = true } }
-  const runtime = new Function('window', 'document', 'api', 'toast', 'Notification', 'TOAST_MS', 'hasSessionId', 'markSessionHandled', navigation + system + '\nreturn { activateSessionFromUnit, notifySystem, bind(value) { sessionNavigators.clear(); if (value) sessionNavigators.set(Symbol(), value) } }')(window, document, api, toast, Notification, 6000, (unit) => typeof unit.sessionId === 'string' && unit.sessionId.length > 0, () => {})
+  const runtime = new Function('window', 'document', 'api', 'toast', 'Notification', 'TOAST_MS', 'hasSessionId', 'markSessionHandled', 'notificationController', navigation + system + '\nreturn { activateSessionFromUnit, notifySystem, bind(value) { sessionNavigators.clear(); if (value) sessionNavigators.set(Symbol(), value) } }')(window, document, api, toast, Notification, 6000, (unit) => typeof unit.sessionId === 'string' && unit.sessionId.length > 0, () => {}, null)
   runtime.bind({ openSession(id) { if (openThrows) throw new Error('open'); opened.push(id) } })
   return { ...runtime, opened, requests, messages, notifications, focuses: () => focuses }
 }
@@ -319,13 +319,19 @@ for (const first of [0, 1]) test('N4 任一owner先卸载均用存活服务 ' + 
 
 test('N4 最后卸载/同factory重启/HMR后旧动作不复活，旧cleanup不伤新代', async () => {
   const f = fixture(), a = f.owner()
+  // 唤醒端点的失败提示异步落栈且不带 onClick,取卡片时按直达回调过滤
+  const cards = () => f.shown.filter(item => typeof item.opts?.onClick === 'function')
   await f.notify([unit()]); const oldClick = f.shown[0].opts.onClick, oldNative = f.native[0]
   a.off(); oldClick(); oldNative.onclick(); assert.deepEqual(a.opened, [])
-  const b = f.owner(); oldClick(); assert.deepEqual(b.opened, [])
-  await f.notify([{ ...unit(), id: 'B2' }]); const bClick = f.shown.at(-1).opts.onClick
+  const b = f.owner(); oldClick(); assert.deepEqual(b.opened, ['B'], '迟到闭包点击现读注册表,由同factory存活实例接管')
+  await f.notify([{ ...unit(), id: 'B2' }])
+  await new Promise(resolve => setImmediate(resolve))
+  const bClick = cards().at(-1).opts.onClick
   const fresh = f.factory(), c = f.owner(fresh)
-  bClick(); b.off(); a.off(); assert.deepEqual(b.opened, [])
-  await f.notify([{ ...unit(), id: 'B3' }], fresh); f.shown.at(-1).opts.onClick()
+  bClick(); b.off(); a.off(); assert.deepEqual(b.opened, ['B', 'B'], 'B2 卡片点击由同 factory 存活的 b 接管')
+  await f.notify([{ ...unit(), id: 'B3' }], fresh)
+  await new Promise(resolve => setImmediate(resolve))
+  cards().at(-1).opts.onClick()
   assert.deepEqual(c.opened, ['B']); c.off()
 })
 
